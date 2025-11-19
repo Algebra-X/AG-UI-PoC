@@ -9,7 +9,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Простая схема входных данных AG-UI (под то, что шлёт Chat.vue)
 const messageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "system"]),
@@ -40,17 +39,14 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
 
   const input = parsed.data;
 
-  // Включаем SSE
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
 
-  // 👇 важное место — говорим TS, что нам не нужны строгие типы
   const encoder: any = new EventEncoder();
 
-  // 1) RUN_STARTED
   encoder.encode({
     type: "RUN_STARTED",
     threadId: input.threadId,
@@ -65,14 +61,11 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // 2) Берём последнее user-сообщение
   const lastUser = [...input.messages].reverse().find((m) => m.role === "user");
   const userText = lastUser?.content ?? "empty message";
 
-  // 3) Простейший ответ
-  const replyText = `Псевдо-ответ агента на: "${userText}"`;
+  const replyText = `Pseudo-response of the agent to: "${userText}"`;
 
-  // 4) Начинаем текстовое сообщение
   res.write(
     encoder.encode({
       type: "TEXT_MESSAGE_START",
@@ -81,7 +74,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // 5) Стримим текст по кусочкам
   const chunkSize = 20;
   for (let i = 0; i < replyText.length; i += chunkSize) {
     const chunk = replyText.slice(i, i + chunkSize);
@@ -95,12 +87,9 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
       } as any),
     );
 
-    // небольшая задержка для эффекта "печати"
-    // eslint-disable-next-line no-await-in-loop
     await new Promise((resolve) => setTimeout(resolve, 30));
   }
 
-  // 6) Завершаем текст
   res.write(
     encoder.encode({
       type: "TEXT_MESSAGE_END",
@@ -108,7 +97,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // 7) RUN_FINISHED
   res.write(
     encoder.encode({
       type: "RUN_FINISHED",

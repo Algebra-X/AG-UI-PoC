@@ -5,13 +5,19 @@ The goal is to demonstrate AG-UI’s basic capabilities on top of a simple Mastr
 
 📁 Project Structure
 
-mastra-ag-ui-demo/
-├─ src/
-│  ├─ mastra/
-│  └─ ag-ui-mastra.ts
-├─ vue-agui-client/
-├─ package.json
-└─ README.md
+
+    mastra-ag-ui-demo/
+    ├── src/
+    │ ├── mastra/
+    │ ├── ag-ui-mastra.ts
+    │
+    ├── vue-agui-client/
+    │ ├── src/
+    │ ├── index.html
+    │ └── ...
+    │
+    ├── package.json
+    └── README.md
 
 
 ✅ What’s Already Implemented

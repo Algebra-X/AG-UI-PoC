@@ -83,6 +83,7 @@ Already done:
 ✔ frontend client
 ✔ text chat
 ✔ RUN_* and TEXT_* events
+✔ Connected with the real weatherAgent
 ```
 Not yet implemented:
 ```
@@ -92,11 +93,9 @@ Not yet implemented:
 ⏳ Interrupts / human-in-the-loop
 ⏳ Backend side-effects
 ⏳ Shared state
-⏳ Connecting the real weatherAgent
+
 ```
 🔧 Next Steps
-
-Connect real weatherAgent
 
 Add THINKING_STEP
 

@@ -53,18 +53,22 @@ Frontend (vue-agui-client)
 🚀 How to Run
 
 1. Backend (AG-UI server)
+```
 cd mastra-ag-ui-demo
 npm install
 npm run agui:dev
+```
 
 
 Server: http://localhost:8000/mastra-agent
 
 2. Frontend (Vue) 
 
+```
 cd mastra-ag-ui-demo/vue-agui-client
 npm install
 npm run dev
+```
 
 Open at: http://localhost:5173
 
@@ -72,15 +76,16 @@ Open at: http://localhost:5173
 
 Already done:
 
+```
 ✔ AG-UI endpoint
 ✔ SSE streaming
 ✔ correct event format
 ✔ frontend client
 ✔ text chat
 ✔ RUN_* and TEXT_* events
-
+```
 Not yet implemented:
-
+```
 ⏳ THINKING_STEP
 ⏳ UI_COMPONENT
 ⏳ Frontend tool calls
@@ -88,7 +93,7 @@ Not yet implemented:
 ⏳ Backend side-effects
 ⏳ Shared state
 ⏳ Connecting the real weatherAgent
-
+```
 🔧 Next Steps
 
 Connect real weatherAgent

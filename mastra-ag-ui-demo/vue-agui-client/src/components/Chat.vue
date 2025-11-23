@@ -1,79 +1,82 @@
 <template>
   <div class="chat-container">
-    <!-- ✅ Thinking history (всегда сверху, накапливается) -->
-    <div v-if="thinkingHistory.length" class="history-box">
-      <div class="history-title">Thinking history</div>
+    <!-- ✅ Unified Thinking Panel -->
+    <div v-if="hasAnyThinking" class="thinking-panel">
+      <div class="thinking-panel-title">
+        🧠 Thinking
+        <span v-if="activeRunId" class="badge">active: {{ activeRunId }}</span>
+      </div>
 
-      <div
-        v-for="h in thinkingHistory"
-        :key="h.runId"
-        class="history-run"
-      >
-        <div class="history-run-title">
-          Run {{ h.runId }}
-        </div>
-        <ul class="history-list">
+      <!-- Active steps -->
+      <div v-if="thinkingSteps.length" class="active-steps">
+        <div class="section-title">Сейчас делаю</div>
+        <ul class="thinking-list">
           <li
-            v-for="(s, i) in h.steps"
+            v-for="(s, i) in thinkingSteps"
             :key="s.stepId"
-            class="history-item finished"
+            class="thinking-item"
+            :class="s.status"
           >
             <span class="dot" />
-            <span class="history-text">{{ i + 1 }}. {{ s.title }}</span>
+            <span class="thinking-text">{{ i + 1 }}. {{ prettyTitle(s.title) }}</span>
+            <span v-if="s.status === 'running'" class="spinner" />
           </li>
         </ul>
       </div>
-    </div>
 
-    <!-- ✅ Active thinking steps (только пока идёт run) -->
-    <div v-if="thinkingSteps.length" class="thinking-box">
-      <div class="thinking-title">Assistant is thinking…</div>
-      <ul class="thinking-list">
-        <li
-          v-for="s in thinkingSteps"
-          :key="s.stepId"
-          class="thinking-item"
-          :class="s.status"
+      <!-- History -->
+      <div v-if="thinkingHistory.length" class="history-steps">
+        <div class="section-title">История размышлений</div>
+
+        <div
+          v-for="h in thinkingHistory"
+          :key="h.runId"
+          class="history-run"
         >
-          <span class="dot" />
-          <span class="thinking-text">{{ s.title }}</span>
+          <button class="history-run-header" @click="toggleRun(h.runId)">
+            <span>Run {{ h.runId }}</span>
+            <span class="muted">{{ h.steps.length }} steps</span>
+            <span class="chev">{{ expandedRuns.has(h.runId) ? "▾" : "▸" }}</span>
+          </button>
 
-          <!-- маленький спиннер только у текущего шага -->
-          <span v-if="s.status === 'running'" class="spinner" />
-        </li>
-      </ul>
+          <ul
+            v-if="expandedRuns.has(h.runId)"
+            class="thinking-list history-list"
+          >
+            <li
+              v-for="(s, i) in h.steps"
+              :key="s.stepId"
+              class="thinking-item finished"
+            >
+              <span class="dot" />
+              <span class="thinking-text">{{ i + 1 }}. {{ prettyTitle(s.title) }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
 
     <!-- ✅ Messages -->
     <div class="messages">
-      <div
-        v-for="m in messages"
-        :key="m.id"
-        class="message"
-        :class="m.role"
-      >
+      <div v-for="m in messages" :key="m.id" class="message" :class="m.role">
         <div class="message-text">
           <strong>{{ m.role }}:</strong> {{ m.content }}
         </div>
 
-        <!-- ✅ UI blocks под сообщением ассистента -->
         <div v-if="m.ui?.length" class="ui-blocks">
           <div v-for="(b, i) in m.ui" :key="b.id ?? i">
-            <WeatherCard
-              v-if="b.component === 'weather-card'"
-              v-bind="b.props"
-            />
+            <WeatherCard v-if="b.component === 'weather-card'" v-bind="b.props" />
           </div>
         </div>
       </div>
     </div>
 
     <!-- ✅ Input -->
-    <form class="input-row" @submit.prevent="send">
+    <form class="input-row" @submit.prevent="sendUser">
       <input
         v-model="userInput"
         type="text"
-        placeholder="Ask about weather..."
+        placeholder="Ask about weather or time..."
       />
       <button type="submit">Send</button>
     </form>
@@ -81,10 +84,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import WeatherCard from "./WeatherCard.vue";
 
-type Role = "user" | "assistant" | "system";
+type Role = "user" | "assistant" | "system" | "tool";
 
 type UiBlock = {
   id?: string;
@@ -109,6 +112,8 @@ interface ChatMessage {
   role: Role;
   content: string;
   messageId?: string;
+  toolCallId?: string;
+  name?: string; // tool name
   ui?: UiBlock[];
 }
 
@@ -118,11 +123,42 @@ const userInput = ref("");
 const threadId = "demo-thread";
 let runCounter = 0;
 
-// ✅ активные шаги (только текущий run)
+// active + history steps
 const thinkingSteps = ref<ThinkingStep[]>([]);
-
-// ✅ история шагов сверху (накапливается по run)
 const thinkingHistory = ref<ThinkingRunHistory[]>([]);
+
+// UI state: which history runs expanded
+const expandedRuns = ref<Set<string>>(new Set());
+
+// derived
+const activeRunId = ref<string | null>(null);
+
+const hasAnyThinking = computed(
+  () => thinkingSteps.value.length > 0 || thinkingHistory.value.length > 0
+);
+
+function toggleRun(runId: string) {
+  const set = expandedRuns.value;
+  if (set.has(runId)) set.delete(runId);
+  else set.add(runId);
+  // trigger reactivity
+  expandedRuns.value = new Set(set);
+}
+
+function prettyTitle(title: string) {
+  const t = title.toLowerCase().trim();
+  const map: Record<string, string> = {
+    "understanding the user's request": "Понимаю запрос пользователя",
+    "extracting location from the message": "Извлекаю локацию из сообщения",
+    "preparing tool call for weather data": "Готовлю вызов инструмента погоды",
+    "running mastra weather agent": "Запускаю Mastra-агента погоды",
+    "formatting response and ui card": "Форматирую ответ и UI-карточку",
+    "checking if a frontend time tool is needed": "Проверяю нужен ли браузерный инструмент времени",
+    "selecting frontend time tool": "Выбираю браузерный инструмент времени",
+    "formatting final answer": "Форматирую финальный ответ",
+  };
+  return map[t] ?? title;
+}
 
 function findAssistantByMessageId(messageId: string) {
   return messages.value.find(
@@ -139,57 +175,73 @@ function upsertStep(stepId: string, title: string, status: StepStatus) {
     thinkingSteps.value.push({ stepId, title, status });
   }
 }
-
 function finishStep(stepId: string) {
   const s = thinkingSteps.value.find((x) => x.stepId === stepId);
   if (s) s.status = "finished";
 }
-
-// ✅ переносим активные steps в историю сверху и очищаем активные
 function persistStepsToTopHistory(runId: string) {
   if (!thinkingSteps.value.length) return;
 
-  // гарантируем что все стали finished
   const finishedSteps = thinkingSteps.value.map((s) => ({
     ...s,
     status: "finished" as const,
   }));
 
-  thinkingHistory.value.unshift({
-    runId,
-    steps: finishedSteps,
-  });
+  thinkingHistory.value.unshift({ runId, steps: finishedSteps });
+  expandedRuns.value.add(runId); // авто-раскрываем свежий run
+  expandedRuns.value = new Set(expandedRuns.value);
 
   thinkingSteps.value = [];
+  activeRunId.value = null;
 }
 
-async function send() {
-  if (!userInput.value.trim()) return;
+/** CLIENT TOOLS */
+const clientTools: Record<string, (args: any) => Promise<string>> = {
+  async getClientTime(args: any) {
+    const now = new Date();
+    if (args?.format === "iso") return now.toISOString();
+    return now.toLocaleString();
+  },
+};
 
-  // сбрасываем steps для нового run
-  thinkingSteps.value = [];
+type PendingToolCall = {
+  toolCallId: string;
+  toolCallName: string;
+  args: any;
+};
+let pendingToolCall: PendingToolCall | null = null;
 
-  const userMessage: ChatMessage = {
-    id: crypto.randomUUID(),
-    role: "user",
-    content: userInput.value,
-  };
+const toolArgsById = new Map<string, string>();
 
-  messages.value.push(userMessage);
+function hasToolResult(toolCallId: string) {
+  return messages.value.some(
+    (m) => m.role === "tool" && m.toolCallId === toolCallId,
+  );
+}
 
-  const runId = `run-${++runCounter}`;
+async function runAgent(runId: string) {
+  activeRunId.value = runId;
 
   const payload = {
     threadId,
     runId,
-    messages: messages.value.map(({ id, role, content }) => ({ id, role, content })),
-    tools: [],
+    messages: messages.value.map(({ id, role, content, toolCallId, name }) => ({
+      id, role, content, toolCallId, name
+    })),
+    tools: [
+      {
+        name: "getClientTime",
+        description: "Returns the user's local time from the browser.",
+        parameters: {
+          type: "object",
+          properties: { format: { type: "string" } },
+        },
+      },
+    ],
     context: [],
     forwardedProps: {},
     state: {},
   };
-
-  userInput.value = "";
 
   const response = await fetch("http://localhost:8000/mastra-agent", {
     method: "POST",
@@ -199,6 +251,7 @@ async function send() {
 
   if (!response.ok || !response.body) {
     console.error("Bad response from mastra-agent");
+    activeRunId.value = null;
     return;
   }
 
@@ -210,40 +263,51 @@ async function send() {
     if (done) break;
 
     const chunk = decoder.decode(value, { stream: true });
-    console.log("RAW SSE chunk:", chunk);
-
     const lines = chunk.split("\n");
+
     for (const line of lines) {
       if (!line.startsWith("data:")) continue;
-
       const jsonStr = line.slice("data:".length).trim();
       if (!jsonStr) continue;
 
       try {
         const event = JSON.parse(jsonStr);
 
-        // ✅ THINKING STEPS
+        // Thinking steps
         if (event.type === "STEP_STARTED") {
-          upsertStep(
-            event.stepId as string,
-            (event.title as string) || "Thinking…",
-            "running",
-          );
+          upsertStep(event.stepId, event.title || "Thinking…", "running");
         }
-
         if (event.type === "STEP_FINISHED") {
-          finishStep(event.stepId as string);
+          finishStep(event.stepId);
         }
 
-        // ✅ RUN закончился -> переносим steps в историю сверху
-        if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
-          persistStepsToTopHistory(runId);
+        // Tool calls (frontend)
+        if (event.type === "TOOL_CALL_START") {
+          toolArgsById.set(event.toolCallId, "");
+          pendingToolCall = {
+            toolCallId: event.toolCallId,
+            toolCallName: event.toolCallName,
+            args: {},
+          };
         }
 
-        // ✅ TEXT
+        if (event.type === "TOOL_CALL_ARGS") {
+          const prev = toolArgsById.get(event.toolCallId) || "";
+          toolArgsById.set(event.toolCallId, prev + (event.delta || ""));
+        }
+
+        if (event.type === "TOOL_CALL_END") {
+          const rawArgs = toolArgsById.get(event.toolCallId) || "{}";
+          let argsObj: any = {};
+          try { argsObj = JSON.parse(rawArgs); } catch {}
+          if (pendingToolCall && pendingToolCall.toolCallId === event.toolCallId) {
+            pendingToolCall.args = argsObj;
+          }
+        }
+
+        // Text
         if (event.type === "TEXT_MESSAGE_START") {
           const msgId = event.messageId as string;
-
           if (!findAssistantByMessageId(msgId)) {
             messages.value.push({
               id: crypto.randomUUID(),
@@ -258,10 +322,8 @@ async function send() {
         if (event.type === "TEXT_MESSAGE_CONTENT" && typeof event.delta === "string") {
           const msgId = event.messageId as string;
           const target = findAssistantByMessageId(msgId);
-
-          if (target) {
-            target.content += event.delta;
-          } else {
+          if (target) target.content += event.delta;
+          else {
             messages.value.push({
               id: crypto.randomUUID(),
               role: "assistant",
@@ -272,7 +334,7 @@ async function send() {
           }
         }
 
-        // ✅ UI component
+        // UI blocks
         if (event.type === "UI_COMPONENT") {
           const msgId = event.messageId as string;
           const target = findAssistantByMessageId(msgId);
@@ -296,88 +358,107 @@ async function send() {
             });
           }
         }
+
+        // Run end
+        if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
+          persistStepsToTopHistory(runId);
+
+          if (event.pendingToolCall) {
+            pendingToolCall = event.pendingToolCall as PendingToolCall;
+          }
+
+          // выполняем тулзу только если результата ещё нет
+          if (pendingToolCall && !hasToolResult(pendingToolCall.toolCallId)) {
+            const toolFn = clientTools[pendingToolCall.toolCallName];
+            if (toolFn) {
+              const resultText = await toolFn(pendingToolCall.args);
+
+              messages.value.push({
+                id: crypto.randomUUID(),
+                role: "tool",
+                name: pendingToolCall.toolCallName,
+                toolCallId: pendingToolCall.toolCallId,
+                content: resultText,
+              });
+
+              const followUpRunId = `run-${++runCounter}`;
+              pendingToolCall = null; // анти-луп
+              await runAgent(followUpRunId);
+            } else {
+              console.warn("No client tool handler for", pendingToolCall.toolCallName);
+              pendingToolCall = null;
+            }
+          } else {
+            pendingToolCall = null;
+          }
+        }
       } catch (e) {
         console.warn("Failed to parse SSE event json:", jsonStr, e);
       }
     }
   }
 }
+
+async function sendUser() {
+  if (!userInput.value.trim()) return;
+
+  thinkingSteps.value = [];
+
+  messages.value.push({
+    id: crypto.randomUUID(),
+    role: "user",
+    content: userInput.value,
+  });
+
+  const runId = `run-${++runCounter}`;
+  userInput.value = "";
+
+  await runAgent(runId);
+}
 </script>
 
 <style scoped>
 .chat-container {
-  max-width: 600px;
+  max-width: 640px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-/* ===== Thinking history ===== */
-.history-box {
-  border: 1px dashed #555;
-  border-radius: 10px;
+/* ===== Unified Thinking Panel ===== */
+.thinking-panel {
+  border: 1px dashed rgba(255,255,255,0.25);
+  border-radius: 12px;
   padding: 10px 12px;
-  background: rgba(90, 90, 90, 0.08);
+  background: rgba(120,120,120,0.08);
+  display: grid;
+  gap: 10px;
 }
-.history-title {
+.thinking-panel-title {
   font-size: 13px;
   font-weight: 700;
+  opacity: 0.95;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
   opacity: 0.9;
-  margin-bottom: 6px;
 }
-.history-run {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed rgba(255,255,255,0.12);
-}
-.history-run-title {
+
+.section-title {
   font-size: 12px;
   font-weight: 600;
   opacity: 0.8;
   margin-bottom: 4px;
 }
-.history-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: 6px;
-}
-.history-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-}
-.history-item.finished {
-  opacity: 0.55;
-  text-decoration: line-through;
-}
-.history-item .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: #aaa;
-  display: inline-block;
-}
-.history-text {
-  white-space: pre-wrap;
-}
 
-/* ===== Active thinking ===== */
-.thinking-box {
-  border: 1px dashed #666;
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: rgba(120, 120, 120, 0.08);
-}
-.thinking-title {
-  font-size: 13px;
-  opacity: 0.9;
-  margin-bottom: 6px;
-}
 .thinking-list {
   list-style: none;
   padding: 0;
@@ -385,6 +466,7 @@ async function send() {
   display: grid;
   gap: 6px;
 }
+
 .thinking-item {
   display: flex;
   align-items: center;
@@ -398,17 +480,21 @@ async function send() {
   background: #aaa;
   display: inline-block;
 }
+
 .thinking-item.running {
-  opacity: 1;
   font-weight: 600;
+  opacity: 1;
 }
 .thinking-item.running .dot {
   animation: pulse 1s infinite ease-in-out;
 }
+
 .thinking-item.finished {
   opacity: 0.55;
   text-decoration: line-through;
 }
+
+/* spinner */
 .spinner {
   margin-left: 4px;
   width: 10px;
@@ -419,21 +505,45 @@ async function send() {
   animation: spin 0.8s linear infinite;
 }
 
+/* history run accordion */
+.history-run {
+  border-top: 1px dashed rgba(255,255,255,0.12);
+  padding-top: 8px;
+  margin-top: 6px;
+}
+.history-run-header {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 4px 0;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.history-run-header:hover { opacity: 1; }
+.muted { opacity: 0.6; font-weight: 400; }
+.chev { opacity: 0.8; }
+
 @keyframes pulse {
   0% { transform: scale(0.9); opacity: 0.4; }
   50% { transform: scale(1.2); opacity: 1; }
   100% { transform: scale(0.9); opacity: 0.4; }
 }
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ===== Chat ===== */
 .messages {
   border: 1px solid #ddd;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 12px;
-  min-height: 200px;
+  min-height: 220px;
 }
 .message {
   margin-bottom: 10px;
@@ -441,26 +551,15 @@ async function send() {
   flex-direction: column;
   gap: 6px;
 }
-.message.user {
-  text-align: right;
-}
-.message-text {
-  white-space: pre-wrap;
-}
-.ui-blocks {
-  margin-left: 8px;
-}
+.message.user { text-align: right; }
+.message-text { white-space: pre-wrap; }
+.ui-blocks { margin-left: 8px; }
 
 /* ===== Input ===== */
 .input-row {
   display: flex;
   gap: 8px;
 }
-input {
-  flex: 1;
-  padding: 8px;
-}
-button {
-  padding: 8px 12px;
-}
+input { flex: 1; padding: 8px; }
+button { padding: 8px 12px; }
 </style>

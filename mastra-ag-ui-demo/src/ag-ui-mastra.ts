@@ -11,19 +11,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// расширяем роли: добавили "tool"
 const messageSchema = z.object({
   id: z.string(),
-  role: z.enum(["user", "assistant", "system"]),
+  role: z.enum(["user", "assistant", "system", "tool"]),
   content: z.string(),
+  toolCallId: z.string().optional(),
+  name: z.string().optional(), // tool name для tool-ответов
 });
 
-// правильные схемы tools/context под твой payload
+// tools/context
 const toolSchema = z.object({
   name: z.string(),
   description: z.string(),
   parameters: z.any().optional(),
 });
-
 const contextSchema = z.object({
   value: z.string(),
   description: z.string(),
@@ -47,17 +49,12 @@ type WeatherPayload = {
   windMs: number;
 };
 
-// ищем в тексте блок:
-// ```weather
-// {...json...}
-// ```
 function extractWeatherJson(text: string): {
   cleanText: string;
   weather?: WeatherPayload;
 } {
   const regex = /```weather\s*([\s\S]*?)```/i;
   const match = text.match(regex);
-
   if (!match) return { cleanText: text };
 
   const jsonStr = match[1].trim();
@@ -73,26 +70,14 @@ function extractWeatherJson(text: string): {
   return { cleanText, weather };
 }
 
-// helper для задержек
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// helper для шагов
 function stepStarted(encoder: EventEncoder, stepId: string, title: string) {
-  return encoder.encode({
-    type: "STEP_STARTED",
-    stepId,
-    title,
-  } as any);
+  return encoder.encode({ type: "STEP_STARTED", stepId, title } as any);
 }
-
 function stepFinished(encoder: EventEncoder, stepId: string) {
-  return encoder.encode({
-    type: "STEP_FINISHED",
-    stepId,
-  } as any);
+  return encoder.encode({ type: "STEP_FINISHED", stepId } as any);
 }
-
-// helper чтобы шаги были компактные
 async function runStep(
   res: Response,
   encoder: EventEncoder,
@@ -105,9 +90,63 @@ async function runStep(
   res.write(stepFinished(encoder, stepId));
 }
 
+/**
+ * 🔎 Time-intent detector (RU + EN).
+ * Раньше "Который сейчас час?" не матчился.
+ */
+function needsClientTime(userText: string) {
+  const t = userText.toLowerCase().trim();
+
+  const ruTriggers = [
+    "который час",
+    "который сейчас час",
+    "сколько времени",
+    "сколько сейчас времени",
+    "текущее время",
+    "время сейчас",
+    "какое сейчас время",
+  ];
+
+  const enTriggers = [
+    "what time is it",
+    "current time",
+    "local time",
+    "time now",
+    "clock",
+  ];
+
+  if (ruTriggers.some((x) => t.includes(x))) return true;
+  if (enTriggers.some((x) => t.includes(x))) return true;
+
+  // мягкий regex: "который ... час" / "сколько ... времени"
+  if (/(котор(ый|ая|ое)\s+.*час)/i.test(t)) return true;
+  if (/(сколько\s+.*времен)/i.test(t)) return true;
+
+  return false;
+}
+
+/**
+ * ✅ Ищем tool-result getClientTime ПОСЛЕ последнего user-сообщения.
+ * Это ломает бесконечный цикл, т.к. follow-up уже содержит tool-result.
+ */
+function findLatestClientTimeResult(messages: any[]) {
+  const lastUserIdx =
+    [...messages]
+      .map((m, i) => ({ m, i }))
+      .reverse()
+      .find((x) => x.m.role === "user")?.i ?? -1;
+
+  const afterLastUser = messages.slice(lastUserIdx + 1);
+
+  const toolMsg = [...afterLastUser]
+    .reverse()
+    .find((m) => m.role === "tool" && m.name === "getClientTime");
+
+  return toolMsg; // { content, toolCallId, name }
+}
+
 app.post("/mastra-agent", async (req: Request, res: Response) => {
   const parsed = aguiInputSchema.safeParse(req.body);
-
   if (!parsed.success) {
     console.error("Invalid AG-UI payload:", parsed.error.format());
     res.status(400).json({
@@ -127,11 +166,9 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   });
 
   const encoder = new EventEncoder();
-
-  // уникальный messageId на каждый run
   const messageId = `assistant-${input.runId}`;
 
-  // 1) RUN_STARTED
+  // RUN_STARTED
   res.write(
     encoder.encode({
       type: "RUN_STARTED",
@@ -140,24 +177,151 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // Берём последнее user-сообщение (fallback + props)
   const lastUser = [...input.messages].reverse().find((m) => m.role === "user");
   const userText = lastUser?.content ?? "empty message";
 
-  // === THINKING STEPS (English, first longer) ===
+  // =========================================================
+  // ✅ TIME SCENARIO
+  // =========================================================
+  if (needsClientTime(userText)) {
+    await runStep(
+      res,
+      encoder,
+      `step-${input.runId}-1`,
+      "Interpreting the user's question",
+      700,
+    );
+
+    await runStep(
+      res,
+      encoder,
+      `step-${input.runId}-2`,
+      "Deciding whether a browser time tool is required",
+      500,
+    );
+
+    const existingTime = findLatestClientTimeResult(input.messages);
+
+    // Если времени ещё нет -> просим фронт вызвать тулзу ОДИН РАЗ
+    if (!existingTime) {
+      await runStep(
+        res,
+        encoder,
+        `step-${input.runId}-3`,
+        "Requesting local time from the client",
+        300,
+      );
+
+      const timeToolCallId = `client-time-${input.threadId}`; // стабильный ID на thread
+
+      res.write(
+        encoder.encode({
+          type: "TOOL_CALL_START",
+          toolCallId: timeToolCallId,
+          toolCallName: "getClientTime",
+        } as any),
+      );
+
+      res.write(
+        encoder.encode({
+          type: "TOOL_CALL_ARGS",
+          toolCallId: timeToolCallId,
+          delta: JSON.stringify({ format: "iso" }),
+        } as any),
+      );
+
+      res.write(
+        encoder.encode({
+          type: "TOOL_CALL_END",
+          toolCallId: timeToolCallId,
+        } as any),
+      );
+
+      // Завершаем run -> фронт выполнит тулзу и сделает follow-up
+      res.write(
+        encoder.encode({
+          type: "RUN_FINISHED",
+          threadId: input.threadId,
+          runId: input.runId,
+          pendingToolCall: {
+            toolCallId: timeToolCallId,
+            toolCallName: "getClientTime",
+            args: { format: "iso" },
+            reason: "user asked about local time",
+          },
+        } as any),
+      );
+
+      res.end();
+      return;
+    }
+
+    // Если tool-result есть -> отвечаем временем и заканчиваем
+    await runStep(
+      res,
+      encoder,
+      `step-${input.runId}-4`,
+      "Composing the final time answer",
+      350,
+    );
+
+    const timeText = existingTime.content;
+    const answer = `Your local time is: ${timeText}`;
+
+    res.write(
+      encoder.encode({
+        type: "TEXT_MESSAGE_START",
+        messageId,
+        role: "assistant",
+      } as any),
+    );
+
+    for (let i = 0; i < answer.length; i += 20) {
+      res.write(
+        encoder.encode({
+          type: "TEXT_MESSAGE_CONTENT",
+          messageId,
+          delta: answer.slice(i, i + 20),
+        } as any),
+      );
+      await sleep(20);
+    }
+
+    res.write(
+      encoder.encode({
+        type: "TEXT_MESSAGE_END",
+        messageId,
+      } as any),
+    );
+
+    res.write(
+      encoder.encode({
+        type: "RUN_FINISHED",
+        threadId: input.threadId,
+        runId: input.runId,
+      } as any),
+    );
+
+    res.end();
+    return;
+  }
+
+  // =========================================================
+  // ✅ WEATHER SCENARIO
+  // =========================================================
   await runStep(
     res,
     encoder,
     `step-${input.runId}-1`,
-    "Understanding the user's request",
-    1200,
+    "Interpreting the user's weather request",
+    1000,
   );
 
   await runStep(
     res,
     encoder,
     `step-${input.runId}-2`,
-    "Extracting location from the message",
+    "Extracting the location from the conversation",
     450,
   );
 
@@ -165,11 +329,10 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     res,
     encoder,
     `step-${input.runId}-3`,
-    "Preparing tool call for weather data",
-    500,
+    "Preparing a weather tool call",
+    450,
   );
 
-  // достаём агента
   const weatherAgent =
     (mastra as any).getAgent?.("weatherAgent") ??
     (mastra as any).agents?.weatherAgent;
@@ -177,12 +340,10 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   let replyText = "";
 
   if (!weatherAgent) {
-    console.error("weatherAgent not found in mastra");
     replyText = `Could not find weatherAgent. Pseudo-response to: "${userText}"`;
   } else {
-    // ✅ ШАГ 4 ДОЛЖЕН ИДТИ РОВНО СТОЛЬКО, СКОЛЬКО ДУМАЕТ АГЕНТ
     const step4 = `step-${input.runId}-4`;
-    res.write(stepStarted(encoder, step4, "Running Mastra weather agent"));
+    res.write(stepStarted(encoder, step4, "Running the Mastra weather agent"));
 
     try {
       const mastraMessages = input.messages
@@ -190,13 +351,22 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
           (m) =>
             (m.role === "user" ||
               m.role === "assistant" ||
-              m.role === "system") &&
+              m.role === "system" ||
+              m.role === "tool") &&
             String(m.content ?? "").trim().length > 0,
         )
-        .map((m) => ({
-          role: m.role as "user" | "assistant" | "system",
-          content: m.content,
-        }));
+        .map((m) => {
+          if (m.role === "tool") {
+            return {
+              role: "system" as const,
+              content: `Tool result (${m.name ?? "tool"} / ${m.toolCallId}): ${m.content}`,
+            };
+          }
+          return {
+            role: m.role as "user" | "assistant" | "system",
+            content: m.content,
+          };
+        });
 
       if (mastraMessages.length === 0) {
         mastraMessages.push({
@@ -213,27 +383,22 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
         result?.text ??
         (typeof result === "string" ? result : String(result ?? ""));
     } catch (err) {
-      console.error("weatherAgent error:", err);
       replyText = `Sorry, I couldn't get the weather. Details: ${String(err)}`;
     } finally {
-      // ✅ теперь шаг 4 завершаем только ПОСЛЕ агента
       res.write(stepFinished(encoder, step4));
     }
   }
 
-  // маленький шаг “сборки ответа”
   await runStep(
     res,
     encoder,
     `step-${input.runId}-5`,
-    "Formatting response and UI card",
+    "Formatting the response and weather card",
     350,
   );
 
-  // вытаскиваем JSON и чистим текст
   const { cleanText, weather } = extractWeatherJson(replyText);
 
-  // 2) TEXT_MESSAGE_START
   res.write(
     encoder.encode({
       type: "TEXT_MESSAGE_START",
@@ -242,12 +407,9 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // 3) TEXT_MESSAGE_CONTENT (стрим cleanText)
-  const chunkSize = 20;
-  for (let i = 0; i < cleanText.length; i += chunkSize) {
-    const chunk = cleanText.slice(i, i + chunkSize);
+  for (let i = 0; i < cleanText.length; i += 20) {
+    const chunk = cleanText.slice(i, i + 20);
     if (!chunk) continue;
-
     res.write(
       encoder.encode({
         type: "TEXT_MESSAGE_CONTENT",
@@ -255,11 +417,9 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
         delta: chunk,
       } as any),
     );
-
     await sleep(30);
   }
 
-  // 4) TEXT_MESSAGE_END
   res.write(
     encoder.encode({
       type: "TEXT_MESSAGE_END",
@@ -267,7 +427,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // 5) UI_COMPONENT (реальные данные из weather JSON)
   if (weather) {
     res.write(
       encoder.encode({
@@ -283,24 +442,8 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
         },
       } as any),
     );
-  } else {
-    res.write(
-      encoder.encode({
-        type: "UI_COMPONENT",
-        messageId,
-        component: "weather-card",
-        props: {
-          location: userText || "Unknown",
-          temperature: "—",
-          status: "No data",
-          humidity: "—",
-          wind: "—",
-        },
-      } as any),
-    );
   }
 
-  // 6) RUN_FINISHED
   res.write(
     encoder.encode({
       type: "RUN_FINISHED",
@@ -315,6 +458,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
 const PORT = 8000;
 app.listen(PORT, () => {
   console.log(
-    `AG-UI Mastra server (Thinking Steps + UI + weather JSON) running at http://localhost:${PORT}/mastra-agent`,
+    `AG-UI Mastra server (Frontend tool calls + Thinking + UI) running at http://localhost:${PORT}/mastra-agent`,
   );
 });

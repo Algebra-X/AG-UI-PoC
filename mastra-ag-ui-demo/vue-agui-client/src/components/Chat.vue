@@ -7,7 +7,19 @@
         class="message"
         :class="m.role"
       >
-        <strong>{{ m.role }}:</strong> {{ m.content }}
+        <div class="message-text">
+          <strong>{{ m.role }}:</strong> {{ m.content }}
+        </div>
+
+        <!-- ✅ UI blocks прямо под сообщением ассистента -->
+        <div v-if="m.ui?.length" class="ui-blocks">
+          <div v-for="(b, i) in m.ui" :key="b.id ?? i">
+            <WeatherCard
+              v-if="b.component === 'weather-card'"
+              v-bind="b.props"
+            />
+          </div>
+        </div>
       </div>
     </div>
 
@@ -24,13 +36,22 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
+import WeatherCard from "./WeatherCard.vue";
 
 type Role = "user" | "assistant" | "system";
+
+type UiBlock = {
+  id?: string;
+  component: string;
+  props: Record<string, any>;
+};
 
 interface ChatMessage {
   id: string;
   role: Role;
   content: string;
+  messageId?: string;
+  ui?: UiBlock[];
 }
 
 const messages = ref<ChatMessage[]>([]);
@@ -38,6 +59,12 @@ const userInput = ref("");
 
 const threadId = "demo-thread";
 let runCounter = 0;
+
+function findAssistantByMessageId(messageId: string) {
+  return messages.value.find(
+    (m) => m.role === "assistant" && m.messageId === messageId,
+  );
+}
 
 async function send() {
   if (!userInput.value.trim()) return;
@@ -53,7 +80,7 @@ async function send() {
   const payload = {
     threadId,
     runId: `run-${++runCounter}`,
-    messages: messages.value,
+    messages: messages.value.map(({ id, role, content }) => ({ id, role, content })),
     tools: [],
     context: [],
     forwardedProps: {},
@@ -64,9 +91,7 @@ async function send() {
 
   const response = await fetch("http://localhost:8000/mastra-agent", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 
@@ -77,8 +102,6 @@ async function send() {
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
-
-  let assistantText = "";
 
   while (true) {
     const { value, done } = await reader.read();
@@ -97,24 +120,66 @@ async function send() {
       try {
         const event = JSON.parse(jsonStr);
 
+        if (event.type === "TEXT_MESSAGE_START") {
+          const msgId = event.messageId as string;
+
+          if (!findAssistantByMessageId(msgId)) {
+            messages.value.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: "",
+              messageId: msgId,
+              ui: [],
+            });
+          }
+        }
+
         if (event.type === "TEXT_MESSAGE_CONTENT" && typeof event.delta === "string") {
-          assistantText += event.delta;
+          const msgId = event.messageId as string;
+          const target = findAssistantByMessageId(msgId);
+
+          if (target) {
+            target.content += event.delta;
+          } else {
+            messages.value.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: event.delta,
+              messageId: msgId,
+              ui: [],
+            });
+          }
+        }
+
+        if (event.type === "UI_COMPONENT") {
+          const msgId = event.messageId as string;
+          const target = findAssistantByMessageId(msgId);
+
+          const block: UiBlock = {
+            id: crypto.randomUUID(),
+            component: event.component,
+            props: event.props ?? {},
+          };
+
+          if (target) {
+            target.ui ??= [];
+            target.ui.push(block);
+          } else {
+            messages.value.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: "",
+              messageId: msgId,
+              ui: [block],
+            });
+          }
         }
       } catch (e) {
         console.warn("Failed to parse SSE event json:", jsonStr, e);
       }
     }
   }
-
-  if (assistantText) {
-    messages.value.push({
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: assistantText,
-    });
-  }
 }
-
 </script>
 
 <style scoped>
@@ -135,11 +200,22 @@ async function send() {
 }
 
 .message {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .message.user {
   text-align: right;
+}
+
+.message-text {
+  white-space: pre-wrap;
+}
+
+.ui-blocks {
+  margin-left: 8px;
 }
 
 .input-row {

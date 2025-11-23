@@ -49,7 +49,10 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
 
   const encoder: any = new EventEncoder();
 
-  // RUN_STARTED
+  // ✅ уникальный id для каждого ответа
+  const messageId = `assistant-${input.runId}`;
+
+  // 1) RUN_STARTED
   res.write(
     encoder.encode({
       type: "RUN_STARTED",
@@ -58,23 +61,22 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // Берём последнее user-сообщение (просто для инфы)
+  // Берём последнее user-сообщение
   const lastUser = [...input.messages].reverse().find((m) => m.role === "user");
   const userText = lastUser?.content ?? "empty message";
 
-  // ---------- ВАЖНО: вызываем Mastra weatherAgent ----------
+  // 2) Вызываем Mastra weatherAgent
   let replyText = "";
 
-  // достаём агента из Mastra
   const weatherAgent =
-    (mastra as any).getAgent?.("weatherAgent") ?? (mastra as any).agents?.weatherAgent;
+    (mastra as any).getAgent?.("weatherAgent") ??
+    (mastra as any).agents?.weatherAgent;
 
   if (!weatherAgent) {
     console.error("weatherAgent not found in mastra");
     replyText = `Could not find weatherAgent. Pseudo-response to: "${userText}"`;
   } else {
     try {
-      // конвертируем AG-UI сообщения в формат Mastra
       const mastraMessages = input.messages
         .filter((m) => ["user", "assistant", "system"].includes(m.role))
         .map((m) => ({
@@ -82,7 +84,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
           content: m.content,
         }));
 
-      // реальный вызов агента
       const result: any = await (weatherAgent as any).generate(
         mastraMessages as any,
       );
@@ -95,18 +96,17 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
       replyText = `Sorry, I couldn't get the weather. Details: ${String(err)}`;
     }
   }
-  // ---------- /ВАЖНО ----------
 
-  // TEXT_MESSAGE_START
+  // 3) TEXT_MESSAGE_START
   res.write(
     encoder.encode({
       type: "TEXT_MESSAGE_START",
-      messageId: "assistant-1",
+      messageId,
       role: "assistant",
     } as any),
   );
 
-  // Стримим ответ чанками
+  // 4) Стримим ответ чанками
   const chunkSize = 20;
   for (let i = 0; i < replyText.length; i += chunkSize) {
     const chunk = replyText.slice(i, i + chunkSize);
@@ -115,25 +115,39 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     res.write(
       encoder.encode({
         type: "TEXT_MESSAGE_CONTENT",
-        messageId: "assistant-1",
+        messageId,
         delta: chunk,
       } as any),
     );
 
-    // маленькая задержка для эффекта "печати"
-    // eslint-disable-next-line no-await-in-loop
     await new Promise((resolve) => setTimeout(resolve, 30));
   }
 
-  // TEXT_MESSAGE_END
+  // 5) TEXT_MESSAGE_END
   res.write(
     encoder.encode({
       type: "TEXT_MESSAGE_END",
-      messageId: "assistant-1",
+      messageId,
     } as any),
   );
 
-  // RUN_FINISHED
+  // 6) UI_COMPONENT (static пока)
+  res.write(
+    encoder.encode({
+      type: "UI_COMPONENT",
+      messageId,
+      component: "weather-card",
+      props: {
+        location: userText || "Unknown",
+        temperature: "21°C",
+        status: "Sunny",
+        humidity: "55%",
+        wind: "3 m/s",
+      },
+    } as any),
+  );
+
+  // 7) RUN_FINISHED
   res.write(
     encoder.encode({
       type: "RUN_FINISHED",

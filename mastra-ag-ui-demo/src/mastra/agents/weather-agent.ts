@@ -1,53 +1,73 @@
-import { Agent } from '@mastra/core/agent';
-import { Memory } from '@mastra/memory';
-import { LibSQLStore } from '@mastra/libsql';
-import { weatherTool } from '../tools/weather-tool';
-import { scorers } from '../scorers/weather-scorer';
+import { Agent } from "@mastra/core/agent";
+import { Memory } from "@mastra/memory";
+import { LibSQLStore } from "@mastra/libsql";
+import { weatherTool } from "../tools/weather-tool";
+import { scorers } from "../scorers/weather-scorer";
 
 export const weatherAgent = new Agent({
-  name: 'Weather Agent',
+  name: "Weather Agent",
   instructions: `
-      You are a helpful weather assistant that provides accurate weather information and can help planning activities based on the weather.
+You are a helpful weather assistant that provides accurate weather information and can help planning activities based on the weather.
 
-      Your primary function is to help users get weather details for specific locations. When responding:
-      - Always ask for a location if none is provided
-      - If the location name isn't in English, please translate it
-      - If giving a location with multiple parts (e.g. "New York, NY"), use the most relevant part (e.g. "New York")
-      - Include relevant details like humidity, wind conditions, and precipitation
-      - Keep responses concise but informative
-      - If the user asks for activities and provides the weather forecast, suggest activities based on the weather forecast.
-      - If the user asks for activities, respond in the format they request.
+Your primary function is to help users get weather details for specific locations. When responding:
+- Always ask for a location if none is provided
+- If the location name isn't in English, please translate it
+- If giving a location with multiple parts (e.g. "New York, NY"), use the most relevant part (e.g. "New York")
+- Include relevant details like humidity, wind conditions, and precipitation
+- Keep responses concise but informative
+- If the user asks for activities and provides the weather forecast, suggest activities based on the weather forecast.
+- If the user asks for activities, respond in the format they request.
 
-      Use the weatherTool to fetch current weather data.
+Use the weatherTool to fetch current weather data.
+
+IMPORTANT:
+After you answer the user, ALSO output a JSON block describing the weather.
+Put it in a fenced code block that starts with \`\`\`weather and ends with \`\`\`.
+
+The JSON must match this shape:
+{
+  "location": string,
+  "temperatureC": number,
+  "status": string,
+  "humidityPct": number,
+  "windMs": number
+}
+
+Example:
+\`\`\`weather
+{"location":"Berlin","temperatureC":12,"status":"Cloudy","humidityPct":70,"windMs":5.2}
+\`\`\`
+
+Do NOT explain this JSON block to the user. Just output it after your normal answer.
 `,
-  model: 'google/gemini-2.5-pro',
+  model: "google/gemini-2.5-pro",
   tools: { weatherTool },
   scorers: {
     toolCallAppropriateness: {
       scorer: scorers.toolCallAppropriatenessScorer,
       sampling: {
-        type: 'ratio',
+        type: "ratio",
         rate: 1,
       },
     },
     completeness: {
       scorer: scorers.completenessScorer,
       sampling: {
-        type: 'ratio',
+        type: "ratio",
         rate: 1,
       },
     },
     translation: {
       scorer: scorers.translationScorer,
       sampling: {
-        type: 'ratio',
+        type: "ratio",
         rate: 1,
       },
     },
   },
   memory: new Memory({
     storage: new LibSQLStore({
-      url: 'file:../mastra.db', // path is relative to the .mastra/output directory
+      url: "file:../mastra.db", // path is relative to the .mastra/output directory
     }),
   }),
 });

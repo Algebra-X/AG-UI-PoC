@@ -27,6 +27,40 @@ const aguiInputSchema = z.object({
   state: z.record(z.unknown()).optional(),
 });
 
+type WeatherPayload = {
+  location: string;
+  temperatureC: number;
+  status: string;
+  humidityPct: number;
+  windMs: number;
+};
+
+// ищем в тексте блок:
+// ```weather
+// {...json...}
+// ```
+function extractWeatherJson(text: string): {
+  cleanText: string;
+  weather?: WeatherPayload;
+} {
+  const regex = /```weather\s*([\s\S]*?)```/i;
+  const match = text.match(regex);
+
+  if (!match) return { cleanText: text };
+
+  const jsonStr = match[1].trim();
+  let weather: WeatherPayload | undefined;
+
+  try {
+    weather = JSON.parse(jsonStr);
+  } catch (e) {
+    console.warn("Failed to parse weather JSON:", jsonStr);
+  }
+
+  const cleanText = text.replace(regex, "").trim();
+  return { cleanText, weather };
+}
+
 app.post("/mastra-agent", async (req: Request, res: Response) => {
   const parsed = aguiInputSchema.safeParse(req.body);
 
@@ -41,6 +75,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
 
   const input = parsed.data;
 
+  // SSE headers
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -61,7 +96,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // Берём последнее user-сообщение
+  // Берём последнее user-сообщение (для UI fallback)
   const lastUser = [...input.messages].reverse().find((m) => m.role === "user");
   const userText = lastUser?.content ?? "empty message";
 
@@ -97,6 +132,9 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     }
   }
 
+  // ✅ вытаскиваем JSON и чистим текст
+  const { cleanText, weather } = extractWeatherJson(replyText);
+
   // 3) TEXT_MESSAGE_START
   res.write(
     encoder.encode({
@@ -106,10 +144,10 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // 4) Стримим ответ чанками
+  // 4) Стримим ответ чанками (ТОЛЬКО cleanText!)
   const chunkSize = 20;
-  for (let i = 0; i < replyText.length; i += chunkSize) {
-    const chunk = replyText.slice(i, i + chunkSize);
+  for (let i = 0; i < cleanText.length; i += chunkSize) {
+    const chunk = cleanText.slice(i, i + chunkSize);
     if (!chunk) continue;
 
     res.write(
@@ -131,21 +169,39 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  // 6) UI_COMPONENT (static пока)
-  res.write(
-    encoder.encode({
-      type: "UI_COMPONENT",
-      messageId,
-      component: "weather-card",
-      props: {
-        location: userText || "Unknown",
-        temperature: "21°C",
-        status: "Sunny",
-        humidity: "55%",
-        wind: "3 m/s",
-      },
-    } as any),
-  );
+  // 6) UI_COMPONENT (реальные данные из weather JSON)
+  if (weather) {
+    res.write(
+      encoder.encode({
+        type: "UI_COMPONENT",
+        messageId,
+        component: "weather-card",
+        props: {
+          location: weather.location,
+          temperature: `${weather.temperatureC}°C`,
+          status: weather.status,
+          humidity: `${weather.humidityPct}%`,
+          wind: `${weather.windMs} m/s`,
+        },
+      } as any),
+    );
+  } else {
+    // fallback если агент не прислал JSON
+    res.write(
+      encoder.encode({
+        type: "UI_COMPONENT",
+        messageId,
+        component: "weather-card",
+        props: {
+          location: userText || "Unknown",
+          temperature: "—",
+          status: "No data",
+          humidity: "—",
+          wind: "—",
+        },
+      } as any),
+    );
+  }
 
   // 7) RUN_FINISHED
   res.write(

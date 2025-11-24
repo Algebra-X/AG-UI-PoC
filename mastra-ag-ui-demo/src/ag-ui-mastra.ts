@@ -11,7 +11,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// роли + tool
+// role + tool
 const messageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "system", "tool"]),
@@ -123,7 +123,7 @@ function needsClientTime(userText: string) {
 }
 
 /**
- * Ищем tool-result getClientTime ПОСЛЕ последнего user-сообщения.
+ * Searching for tool-result getClientTime AFTER the last user message.
  */
 function findLatestClientTimeResult(messages: any[]) {
   const lastUserIdx =
@@ -175,13 +175,13 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   const userText = lastUser?.content ?? "empty message";
 
   // =========================================================
-  // ✅ TIME SCENARIO (обновлённые, разные шаги)
+  // ✅ TIME SCENARIO 
   // =========================================================
   if (needsClientTime(userText)) {
     const existingTime = findLatestClientTimeResult(input.messages);
 
     if (!existingTime) {
-      // ---- RUN-1: только запрос тулзы ----
+      // ---- RUN-1: only tool request ----
       await runStep(
         res,
         encoder,
@@ -241,7 +241,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
       return;
     }
 
-    // ---- RUN-2: ответ по готовому tool-result ----
+    // ---- RUN-2: response based on the ready tool-result ----
     await runStep(
       res,
       encoder,

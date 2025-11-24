@@ -414,7 +414,7 @@ async function runAgent(runId: string) {
             pendingToolCall = event.pendingToolCall as PendingToolCall;
           }
 
-          // выполняем тулзу только если результата ещё нет
+          // We execute the tool only if there is no result yet.
           if (pendingToolCall && !hasToolResult(pendingToolCall.toolCallId)) {
             const toolFn = clientTools[pendingToolCall.toolCallName];
             if (toolFn) {

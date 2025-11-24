@@ -1,6 +1,6 @@
 <template>
   <div class="card">
-    <div class="title">Погода: {{ location }}</div>
+    <div class="title">Weather: {{ location }}</div>
 
     <div class="row">
       <span class="temp">{{ temperature }}</span>
@@ -8,8 +8,8 @@
     </div>
 
     <div class="meta">
-      <div>Влажность: {{ humidity }}</div>
-      <div>Ветер: {{ wind }}</div>
+      <div>Humidity: {{ humidity }}</div>
+      <div>Wind: {{ wind }}</div>
     </div>
   </div>
 </template>

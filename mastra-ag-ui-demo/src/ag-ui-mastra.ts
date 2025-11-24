@@ -300,7 +300,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   }
 
   // =========================================================
-  // ✅ WEATHER SCENARIO (как было, только тексты чуть nicer)
+  // ✅ WEATHER SCENARIO
   // =========================================================
   await runStep(
     res,

@@ -9,7 +9,7 @@
 
       <!-- Active steps -->
       <div v-if="thinkingSteps.length" class="active-steps">
-        <div class="section-title">Сейчас делаю</div>
+        <div class="section-title">Now doing</div>
         <ul class="thinking-list">
           <li
             v-for="(s, i) in thinkingSteps"
@@ -26,7 +26,7 @@
 
       <!-- History -->
       <div v-if="thinkingHistory.length" class="history-steps">
-        <div class="section-title">История размышлений</div>
+        <div class="section-title">Thinking history</div>
 
         <div
           v-for="h in thinkingHistory"
@@ -170,40 +170,10 @@ function getWeatherProps(block: UiBlock): WeatherCardProps {
   return block.props as WeatherCardProps;
 }
 
-/** =========================================================
- *  ✅ Pretty titles
- *  ========================================================= */
 function prettyStepTitle(title: string) {
-  const t = title.toLowerCase().trim();
-
-  const map: Record<string, string> = {
-    // Weather flow
-    "understanding the user's request": "Понимаю запрос пользователя",
-    "interpreting the user's weather request": "Понимаю запрос о погоде",
-    "extracting location from the message": "Извлекаю город из сообщения",
-    "extracting the location from the conversation": "Извлекаю город из диалога",
-    "preparing tool call for weather data": "Готовлю запрос к погодной тулзе",
-    "preparing a weather tool call": "Готовлю запрос к погодной тулзе",
-    "running mastra weather agent": "Запускаю Mastra-агента погоды",
-    "running the mastra weather agent": "Запускаю Mastra-агента погоды",
-    "formatting response and ui card": "Форматирую ответ и карточку погоды",
-    "formatting the response and weather card": "Форматирую ответ и карточку погоды",
-
-    // Time flow
-    "interpreting the user's question": "Понимаю вопрос про время",
-    "deciding whether a browser time tool is required": "Проверяю, нужно ли брать время из браузера",
-    "checking if a frontend time tool is needed": "Проверяю, нужно ли брать время из браузера",
-    "selecting frontend time tool": "Выбираю браузерную тулзу времени",
-    "requesting local time from the client": "Запрашиваю локальное время у клиента",
-    "requesting local time from the browser": "Запрашиваю локальное время у браузера",
-    "reading the time returned by the browser tool": "Читаю время, которое вернул браузер",
-    "replying with the user's local time": "Отвечаю пользователю его локальным временем",
-    "composing the final time answer": "Формирую финальный ответ со временем",
-    "formatting final answer": "Формирую финальный ответ",
-  };
-
-  return map[t] ?? title;
+  return title.trim();
 }
+
 
 function prettyRunTitle(h: ThinkingRunHistory) {
   const titles = h.steps.map(s => s.title.toLowerCase());
@@ -459,7 +429,7 @@ async function runAgent(runId: string) {
               });
 
               const followUpRunId = `run-${++runCounter}`;
-              pendingToolCall = null; // анти-луп
+              pendingToolCall = null; 
               await runAgent(followUpRunId);
             } else {
               console.warn("No client tool handler for", pendingToolCall.toolCallName);

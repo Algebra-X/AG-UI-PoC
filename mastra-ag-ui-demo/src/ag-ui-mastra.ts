@@ -11,16 +11,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// расширяем роли: добавили "tool"
+// роли + tool
 const messageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "system", "tool"]),
   content: z.string(),
   toolCallId: z.string().optional(),
-  name: z.string().optional(), // tool name для tool-ответов
+  name: z.string().optional(),
 });
 
-// tools/context
 const toolSchema = z.object({
   name: z.string(),
   description: z.string(),
@@ -91,8 +90,7 @@ async function runStep(
 }
 
 /**
- * 🔎 Time-intent detector (RU + EN).
- * Раньше "Который сейчас час?" не матчился.
+ * Time-intent detector (RU + EN)
  */
 function needsClientTime(userText: string) {
   const t = userText.toLowerCase().trim();
@@ -118,7 +116,6 @@ function needsClientTime(userText: string) {
   if (ruTriggers.some((x) => t.includes(x))) return true;
   if (enTriggers.some((x) => t.includes(x))) return true;
 
-  // мягкий regex: "который ... час" / "сколько ... времени"
   if (/(котор(ый|ая|ое)\s+.*час)/i.test(t)) return true;
   if (/(сколько\s+.*времен)/i.test(t)) return true;
 
@@ -126,8 +123,7 @@ function needsClientTime(userText: string) {
 }
 
 /**
- * ✅ Ищем tool-result getClientTime ПОСЛЕ последнего user-сообщения.
- * Это ломает бесконечный цикл, т.к. follow-up уже содержит tool-result.
+ * Ищем tool-result getClientTime ПОСЛЕ последнего user-сообщения.
  */
 function findLatestClientTimeResult(messages: any[]) {
   const lastUserIdx =
@@ -142,7 +138,7 @@ function findLatestClientTimeResult(messages: any[]) {
     .reverse()
     .find((m) => m.role === "tool" && m.name === "getClientTime");
 
-  return toolMsg; // { content, toolCallId, name }
+  return toolMsg;
 }
 
 app.post("/mastra-agent", async (req: Request, res: Response) => {
@@ -158,7 +154,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
 
   const input = parsed.data;
 
-  // SSE headers
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -168,7 +163,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   const encoder = new EventEncoder();
   const messageId = `assistant-${input.runId}`;
 
-  // RUN_STARTED
   res.write(
     encoder.encode({
       type: "RUN_STARTED",
@@ -181,38 +175,30 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   const userText = lastUser?.content ?? "empty message";
 
   // =========================================================
-  // ✅ TIME SCENARIO
+  // ✅ TIME SCENARIO (обновлённые, разные шаги)
   // =========================================================
   if (needsClientTime(userText)) {
-    await runStep(
-      res,
-      encoder,
-      `step-${input.runId}-1`,
-      "Interpreting the user's question",
-      700,
-    );
-
-    await runStep(
-      res,
-      encoder,
-      `step-${input.runId}-2`,
-      "Deciding whether a browser time tool is required",
-      500,
-    );
-
     const existingTime = findLatestClientTimeResult(input.messages);
 
-    // Если времени ещё нет -> просим фронт вызвать тулзу ОДИН РАЗ
     if (!existingTime) {
+      // ---- RUN-1: только запрос тулзы ----
       await runStep(
         res,
         encoder,
-        `step-${input.runId}-3`,
-        "Requesting local time from the client",
-        300,
+        `step-${input.runId}-1`,
+        "Detecting that the user is asking for local time",
+        650,
       );
 
-      const timeToolCallId = `client-time-${input.threadId}`; // стабильный ID на thread
+      await runStep(
+        res,
+        encoder,
+        `step-${input.runId}-2`,
+        "Requesting local time from the browser",
+        450,
+      );
+
+      const timeToolCallId = `client-time-${input.threadId}`;
 
       res.write(
         encoder.encode({
@@ -237,7 +223,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
         } as any),
       );
 
-      // Завершаем run -> фронт выполнит тулзу и сделает follow-up
       res.write(
         encoder.encode({
           type: "RUN_FINISHED",
@@ -256,13 +241,21 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
       return;
     }
 
-    // Если tool-result есть -> отвечаем временем и заканчиваем
+    // ---- RUN-2: ответ по готовому tool-result ----
     await runStep(
       res,
       encoder,
-      `step-${input.runId}-4`,
-      "Composing the final time answer",
-      350,
+      `step-${input.runId}-1`,
+      "Reading the time returned by the browser tool",
+      450,
+    );
+
+    await runStep(
+      res,
+      encoder,
+      `step-${input.runId}-2`,
+      "Replying with the user's local time",
+      300,
     );
 
     const timeText = existingTime.content;
@@ -307,7 +300,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   }
 
   // =========================================================
-  // ✅ WEATHER SCENARIO
+  // ✅ WEATHER SCENARIO (как было, только тексты чуть nicer)
   // =========================================================
   await runStep(
     res,
@@ -321,7 +314,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     res,
     encoder,
     `step-${input.runId}-2`,
-    "Extracting the location from the conversation",
+    "Extracting location from the conversation",
     450,
   );
 
@@ -329,7 +322,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     res,
     encoder,
     `step-${input.runId}-3`,
-    "Preparing a weather tool call",
+    "Preparing a weather data tool call",
     450,
   );
 

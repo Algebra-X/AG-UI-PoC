@@ -18,7 +18,7 @@
             :class="s.status"
           >
             <span class="dot" />
-            <span class="thinking-text">{{ i + 1 }}. {{ prettyTitle(s.title) }}</span>
+            <span class="thinking-text">{{ i + 1 }}. {{ prettyStepTitle(s.title) }}</span>
             <span v-if="s.status === 'running'" class="spinner" />
           </li>
         </ul>
@@ -34,7 +34,11 @@
           class="history-run"
         >
           <button class="history-run-header" @click="toggleRun(h.runId)">
-            <span>Run {{ h.runId }}</span>
+            <span class="run-title">
+              {{ prettyRunTitle(h) }}
+              <span class="run-id">({{ h.runId }})</span>
+            </span>
+
             <span class="muted">{{ h.steps.length }} steps</span>
             <span class="chev">{{ expandedRuns.has(h.runId) ? "▾" : "▸" }}</span>
           </button>
@@ -49,7 +53,7 @@
               class="thinking-item finished"
             >
               <span class="dot" />
-              <span class="thinking-text">{{ i + 1 }}. {{ prettyTitle(s.title) }}</span>
+              <span class="thinking-text">{{ i + 1 }}. {{ prettyStepTitle(s.title) }}</span>
             </li>
           </ul>
         </div>
@@ -65,7 +69,10 @@
 
         <div v-if="m.ui?.length" class="ui-blocks">
           <div v-for="(b, i) in m.ui" :key="b.id ?? i">
-            <WeatherCard v-if="b.component === 'weather-card'" v-bind="b.props" />
+            <WeatherCard
+              v-if="b.component === 'weather-card'"
+              v-bind="getWeatherProps(b)"
+            />
           </div>
         </div>
       </div>
@@ -89,11 +96,25 @@ import WeatherCard from "./WeatherCard.vue";
 
 type Role = "user" | "assistant" | "system" | "tool";
 
-type UiBlock = {
-  id?: string;
-  component: string;
-  props: Record<string, any>;
+type WeatherCardProps = {
+  location: string;
+  temperature: string;
+  status: string;
+  humidity?: string;
+  wind?: string;
 };
+
+type UiBlock =
+  | {
+      id?: string;
+      component: "weather-card";
+      props: WeatherCardProps;
+    }
+  | {
+      id?: string;
+      component: string;      // другие компоненты
+      props: Record<string, any>;
+    };
 
 type StepStatus = "running" | "finished";
 type ThinkingStep = {
@@ -141,25 +162,79 @@ function toggleRun(runId: string) {
   const set = expandedRuns.value;
   if (set.has(runId)) set.delete(runId);
   else set.add(runId);
-  // trigger reactivity
   expandedRuns.value = new Set(set);
 }
 
-function prettyTitle(title: string) {
+/** Хелпер, чтобы TS точно знал тип пропсов WeatherCard */
+function getWeatherProps(block: UiBlock): WeatherCardProps {
+  return block.props as WeatherCardProps;
+}
+
+/** =========================================================
+ *  ✅ Pretty titles
+ *  ========================================================= */
+function prettyStepTitle(title: string) {
   const t = title.toLowerCase().trim();
+
   const map: Record<string, string> = {
+    // Weather flow
     "understanding the user's request": "Понимаю запрос пользователя",
-    "extracting location from the message": "Извлекаю локацию из сообщения",
-    "preparing tool call for weather data": "Готовлю вызов инструмента погоды",
+    "interpreting the user's weather request": "Понимаю запрос о погоде",
+    "extracting location from the message": "Извлекаю город из сообщения",
+    "extracting the location from the conversation": "Извлекаю город из диалога",
+    "preparing tool call for weather data": "Готовлю запрос к погодной тулзе",
+    "preparing a weather tool call": "Готовлю запрос к погодной тулзе",
     "running mastra weather agent": "Запускаю Mastra-агента погоды",
-    "formatting response and ui card": "Форматирую ответ и UI-карточку",
-    "checking if a frontend time tool is needed": "Проверяю нужен ли браузерный инструмент времени",
-    "selecting frontend time tool": "Выбираю браузерный инструмент времени",
-    "formatting final answer": "Форматирую финальный ответ",
+    "running the mastra weather agent": "Запускаю Mastra-агента погоды",
+    "formatting response and ui card": "Форматирую ответ и карточку погоды",
+    "formatting the response and weather card": "Форматирую ответ и карточку погоды",
+
+    // Time flow
+    "interpreting the user's question": "Понимаю вопрос про время",
+    "deciding whether a browser time tool is required": "Проверяю, нужно ли брать время из браузера",
+    "checking if a frontend time tool is needed": "Проверяю, нужно ли брать время из браузера",
+    "selecting frontend time tool": "Выбираю браузерную тулзу времени",
+    "requesting local time from the client": "Запрашиваю локальное время у клиента",
+    "requesting local time from the browser": "Запрашиваю локальное время у браузера",
+    "reading the time returned by the browser tool": "Читаю время, которое вернул браузер",
+    "replying with the user's local time": "Отвечаю пользователю его локальным временем",
+    "composing the final time answer": "Формирую финальный ответ со временем",
+    "formatting final answer": "Формирую финальный ответ",
   };
+
   return map[t] ?? title;
 }
 
+function prettyRunTitle(h: ThinkingRunHistory) {
+  const titles = h.steps.map(s => s.title.toLowerCase());
+
+  const isTimeFlow =
+    titles.some(t => t.includes("time")) ||
+    titles.some(t => t.includes("local time")) ||
+    titles.some(t => t.includes("browser time")) ||
+    titles.some(t => t.includes("frontend time"));
+
+  if (isTimeFlow) {
+    const isToolRequestRun =
+      titles.some(t => t.includes("requesting local time"));
+
+    const isToolResultRun =
+      titles.some(t => t.includes("reading the time returned")) ||
+      titles.some(t => t.includes("replying with the user's local time")) ||
+      titles.some(t => t.includes("composing the final time answer")) ||
+      titles.some(t => t.includes("formatting final answer"));
+
+    if (isToolRequestRun) return "🕒 Time — запрос времени у браузера";
+    if (isToolResultRun) return "🕒 Time — ответ по результату тулзы";
+    return "🕒 Time";
+  }
+
+  return "⛅ Weather";
+}
+
+/** =========================================================
+ *  Steps helpers
+ *  ========================================================= */
 function findAssistantByMessageId(messageId: string) {
   return messages.value.find(
     (m) => m.role === "assistant" && m.messageId === messageId,
@@ -188,14 +263,16 @@ function persistStepsToTopHistory(runId: string) {
   }));
 
   thinkingHistory.value.unshift({ runId, steps: finishedSteps });
-  expandedRuns.value.add(runId); // авто-раскрываем свежий run
+  expandedRuns.value.add(runId);
   expandedRuns.value = new Set(expandedRuns.value);
 
   thinkingSteps.value = [];
   activeRunId.value = null;
 }
 
-/** CLIENT TOOLS */
+/** =========================================================
+ *  CLIENT TOOLS
+ *  ========================================================= */
 const clientTools: Record<string, (args: any) => Promise<string>> = {
   async getClientTime(args: any) {
     const now = new Date();
@@ -525,11 +602,18 @@ async function sendUser() {
   text-align: left;
   font-size: 12px;
   font-weight: 600;
-  opacity: 0.85;
+  opacity: 0.9;
 }
 .history-run-header:hover { opacity: 1; }
 .muted { opacity: 0.6; font-weight: 400; }
 .chev { opacity: 0.8; }
+
+.run-title { display: inline-flex; align-items: center; gap: 6px; }
+.run-id {
+  font-size: 11px;
+  opacity: 0.55;
+  font-weight: 400;
+}
 
 @keyframes pulse {
   0% { transform: scale(0.9); opacity: 0.4; }

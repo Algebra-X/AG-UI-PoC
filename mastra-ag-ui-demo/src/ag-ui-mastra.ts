@@ -175,7 +175,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   const userText = lastUser?.content ?? "empty message";
 
   // =========================================================
-  // ✅ TIME SCENARIO 
+  // TIME SCENARIO 
   // =========================================================
   if (needsClientTime(userText)) {
     const existingTime = findLatestClientTimeResult(input.messages);
@@ -300,7 +300,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   }
 
   // =========================================================
-  // ✅ WEATHER SCENARIO
+  //  WEATHER SCENARIO
   // =========================================================
   await runStep(
     res,

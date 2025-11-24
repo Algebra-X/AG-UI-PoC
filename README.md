@@ -84,14 +84,15 @@ Already done:
 ✔ text chat
 ✔ RUN_* and TEXT_* events
 ✔ Connected with the real weatherAgent
+✔ THINKING_STEP
+✔ UI_COMPONENT
+✔ Frontend tool calls
+✔ Backend side-effects
 ```
 Not yet implemented:
 ```
-⏳ THINKING_STEP
-⏳ UI_COMPONENT
-⏳ Frontend tool calls
+
 ⏳ Interrupts / human-in-the-loop
-⏳ Backend side-effects
 ⏳ Shared state
 
 ```

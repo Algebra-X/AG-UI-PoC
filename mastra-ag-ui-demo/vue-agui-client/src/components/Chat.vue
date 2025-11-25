@@ -18,7 +18,9 @@
             :class="s.status"
           >
             <span class="dot" />
-            <span class="thinking-text">{{ i + 1 }}. {{ prettyStepTitle(s.title) }}</span>
+            <span class="thinking-text">
+              {{ i + 1 }}. {{ prettyStepTitle(s.title) }}
+            </span>
             <span v-if="s.status === 'running'" class="spinner" />
           </li>
         </ul>
@@ -40,7 +42,9 @@
             </span>
 
             <span class="muted">{{ h.steps.length }} steps</span>
-            <span class="chev">{{ expandedRuns.has(h.runId) ? "▾" : "▸" }}</span>
+            <span class="chev">
+              {{ expandedRuns.has(h.runId) ? "▾" : "▸" }}
+            </span>
           </button>
 
           <ul
@@ -53,7 +57,9 @@
               class="thinking-item finished"
             >
               <span class="dot" />
-              <span class="thinking-text">{{ i + 1 }}. {{ prettyStepTitle(s.title) }}</span>
+              <span class="thinking-text">
+                {{ i + 1 }}. {{ prettyStepTitle(s.title) }}
+              </span>
             </li>
           </ul>
         </div>
@@ -62,7 +68,12 @@
 
     <!-- ✅ Messages -->
     <div class="messages">
-      <div v-for="m in messages" :key="m.id" class="message" :class="m.role">
+      <div
+        v-for="m in messages"
+        :key="m.id"
+        class="message"
+        :class="m.role"
+      >
         <div class="message-text">
           <strong>{{ m.role }}:</strong> {{ m.content }}
         </div>
@@ -91,8 +102,14 @@
 </template>
 
 <script setup lang="ts">
+// @ts-nocheck  ← важно для того, чтобы TS не ругался на внутренние типы @ag-ui/client
 import { ref, computed } from "vue";
 import WeatherCard from "./WeatherCard.vue";
+import { HttpAgent } from "@ag-ui/client";
+
+/* ==============================
+ * Типы для нашего UI
+ * ============================== */
 
 type Role = "user" | "assistant" | "system" | "tool";
 
@@ -112,7 +129,7 @@ type UiBlock =
     }
   | {
       id?: string;
-      component: string;      // другие компоненты
+      component: string;
       props: Record<string, any>;
     };
 
@@ -138,26 +155,34 @@ interface ChatMessage {
   ui?: UiBlock[];
 }
 
+/* ==============================
+ * AG-UI HttpAgent (клиент)
+ * ============================== */
+
+const agent = new HttpAgent({
+  url: "http://localhost:8000/mastra-agent",
+});
+
+/* ==============================
+ * Reactive state
+ * ============================== */
+
 const messages = ref<ChatMessage[]>([]);
 const userInput = ref("");
 
 const threadId = "demo-thread";
 let runCounter = 0;
 
-// active + history steps
+// thinking
 const thinkingSteps = ref<ThinkingStep[]>([]);
 const thinkingHistory = ref<ThinkingRunHistory[]>([]);
-
-// UI state: which history runs expanded
 const expandedRuns = ref<Set<string>>(new Set());
-
-// derived
 const activeRunId = ref<string | null>(null);
-
 const hasAnyThinking = computed(
-  () => thinkingSteps.value.length > 0 || thinkingHistory.value.length > 0
+  () => thinkingSteps.value.length > 0 || thinkingHistory.value.length > 0,
 );
 
+// helper: expand/collapse runs
 function toggleRun(runId: string) {
   const set = expandedRuns.value;
   if (set.has(runId)) set.delete(runId);
@@ -165,7 +190,7 @@ function toggleRun(runId: string) {
   expandedRuns.value = new Set(set);
 }
 
-/** Хелпер, чтобы TS точно знал тип пропсов WeatherCard */
+// helper: TS hint for props
 function getWeatherProps(block: UiBlock): WeatherCardProps {
   return block.props as WeatherCardProps;
 }
@@ -174,25 +199,25 @@ function prettyStepTitle(title: string) {
   return title.trim();
 }
 
-
 function prettyRunTitle(h: ThinkingRunHistory) {
-  const titles = h.steps.map(s => s.title.toLowerCase());
+  const titles = h.steps.map((s) => s.title.toLowerCase());
 
   const isTimeFlow =
-    titles.some(t => t.includes("time")) ||
-    titles.some(t => t.includes("local time")) ||
-    titles.some(t => t.includes("browser time")) ||
-    titles.some(t => t.includes("frontend time"));
+    titles.some((t) => t.includes("time")) ||
+    titles.some((t) => t.includes("local time")) ||
+    titles.some((t) => t.includes("browser time")) ||
+    titles.some((t) => t.includes("frontend time"));
 
   if (isTimeFlow) {
-    const isToolRequestRun =
-      titles.some(t => t.includes("requesting local time"));
+    const isToolRequestRun = titles.some((t) =>
+      t.includes("requesting local time"),
+    );
 
     const isToolResultRun =
-      titles.some(t => t.includes("reading the time returned")) ||
-      titles.some(t => t.includes("replying with the user's local time")) ||
-      titles.some(t => t.includes("composing the final time answer")) ||
-      titles.some(t => t.includes("formatting final answer"));
+      titles.some((t) => t.includes("reading the time returned")) ||
+      titles.some((t) => t.includes("replying with the user's local time")) ||
+      titles.some((t) => t.includes("composing the final time answer")) ||
+      titles.some((t) => t.includes("formatting final answer"));
 
     if (isToolRequestRun) return "🕒 Time — запрос времени у браузера";
     if (isToolResultRun) return "🕒 Time — ответ по результату тулзы";
@@ -202,9 +227,10 @@ function prettyRunTitle(h: ThinkingRunHistory) {
   return "⛅ Weather";
 }
 
-/** =========================================================
- *  Steps helpers
- *  ========================================================= */
+/* ==============================
+ * Thinking helpers
+ * ============================== */
+
 function findAssistantByMessageId(messageId: string) {
   return messages.value.find(
     (m) => m.role === "assistant" && m.messageId === messageId,
@@ -220,10 +246,12 @@ function upsertStep(stepId: string, title: string, status: StepStatus) {
     thinkingSteps.value.push({ stepId, title, status });
   }
 }
+
 function finishStep(stepId: string) {
   const s = thinkingSteps.value.find((x) => x.stepId === stepId);
   if (s) s.status = "finished";
 }
+
 function persistStepsToTopHistory(runId: string) {
   if (!thinkingSteps.value.length) return;
 
@@ -240,9 +268,9 @@ function persistStepsToTopHistory(runId: string) {
   activeRunId.value = null;
 }
 
-/** =========================================================
- *  CLIENT TOOLS
- *  ========================================================= */
+/* ==============================
+ * CLIENT TOOLS (frontend tools)
+ * ============================== */
 const clientTools: Record<string, (args: any) => Promise<string>> = {
   async getClientTime(args: any) {
     const now = new Date();
@@ -266,185 +294,197 @@ function hasToolResult(toolCallId: string) {
   );
 }
 
+/* ==============================
+ * AG-UI: runAgent + subscriber
+ * ============================== */
+
 async function runAgent(runId: string) {
   activeRunId.value = runId;
 
-  const payload = {
-    threadId,
-    runId,
-    messages: messages.value.map(({ id, role, content, toolCallId, name }) => ({
-      id, role, content, toolCallId, name
-    })),
-    tools: [
-      {
-        name: "getClientTime",
-        description: "Returns the user's local time from the browser.",
-        parameters: {
-          type: "object",
-          properties: { format: { type: "string" } },
+  // Готовим сообщения в формате AG-UI
+  const aguiMessages = messages.value.map(
+    ({ id, role, content, toolCallId, name }) => ({
+      id,
+      role,
+      content,
+      toolCallId,
+      name,
+    }),
+  );
+
+  let currentAssistantMessage: ChatMessage | null = null;
+
+  // Запуск агента через HttpAgent
+  const result = await agent.runAgent(
+    {
+      threadId,
+      runId,
+      messages: aguiMessages,
+      tools: [
+        {
+          name: "getClientTime",
+          description: "Returns the user's local time from the browser.",
+          parameters: {
+            type: "object",
+            properties: { format: { type: "string" } },
+          },
         },
+      ],
+      context: [],
+      state: {},
+      forwardedProps: {},
+    },
+    {
+      // ===== LIFECYCLE =====
+      onRunStartedEvent: ({ runId: startedRunId }) => {
+        activeRunId.value = startedRunId;
       },
-    ],
-    context: [],
-    forwardedProps: {},
-    state: {},
-  };
 
-  const response = await fetch("http://localhost:8000/mastra-agent", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+      // ===== THINKING STEPS =====
+      onStepStartedEvent: ({ event }) => {
+        // event: { stepId, title, ... }
+        upsertStep(event.stepId, event.title || "Thinking…", "running");
+      },
+      onStepFinishedEvent: ({ event }) => {
+        finishStep(event.stepId);
+      },
 
-  if (!response.ok || !response.body) {
-    console.error("Bad response from mastra-agent");
-    activeRunId.value = null;
-    return;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split("\n");
-
-    for (const line of lines) {
-      if (!line.startsWith("data:")) continue;
-      const jsonStr = line.slice("data:".length).trim();
-      if (!jsonStr) continue;
-
-      try {
-        const event = JSON.parse(jsonStr);
-
-        // Thinking steps
-        if (event.type === "STEP_STARTED") {
-          upsertStep(event.stepId, event.title || "Thinking…", "running");
+      // ===== TEXT MESSAGE STREAMING =====
+      onTextMessageStartEvent: ({ event }) => {
+        const msgId = event.messageId;
+        const existing = findAssistantByMessageId(msgId);
+        if (existing) {
+          currentAssistantMessage = existing;
+          return;
         }
-        if (event.type === "STEP_FINISHED") {
-          finishStep(event.stepId);
+        const m: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "",
+          messageId: msgId,
+          ui: [],
+        };
+        messages.value.push(m);
+        currentAssistantMessage = m;
+      },
+      onTextMessageContentEvent: ({ textMessageBuffer }) => {
+        if (currentAssistantMessage) {
+          // textMessageBuffer — уже накопленный текст
+          currentAssistantMessage.content = textMessageBuffer;
         }
+      },
+      onTextMessageEndEvent: () => {
+        currentAssistantMessage = null;
+      },
 
-        // Tool calls (frontend)
-        if (event.type === "TOOL_CALL_START") {
-          toolArgsById.set(event.toolCallId, "");
-          pendingToolCall = {
-            toolCallId: event.toolCallId,
-            toolCallName: event.toolCallName,
-            args: {},
-          };
-        }
+      // ===== UI COMPONENTS (Generative UI, static) =====
+      onUiComponentEvent: ({ event }) => {
+        // event: { messageId, component, props }
+        const msgId = event.messageId;
+        const target = findAssistantByMessageId(msgId);
 
-        if (event.type === "TOOL_CALL_ARGS") {
-          const prev = toolArgsById.get(event.toolCallId) || "";
-          toolArgsById.set(event.toolCallId, prev + (event.delta || ""));
-        }
+        const block: UiBlock = {
+          id: crypto.randomUUID(),
+          component: event.component,
+          props: event.props ?? {},
+        };
 
-        if (event.type === "TOOL_CALL_END") {
-          const rawArgs = toolArgsById.get(event.toolCallId) || "{}";
-          let argsObj: any = {};
-          try { argsObj = JSON.parse(rawArgs); } catch {}
-          if (pendingToolCall && pendingToolCall.toolCallId === event.toolCallId) {
-            pendingToolCall.args = argsObj;
-          }
-        }
-
-        // Text
-        if (event.type === "TEXT_MESSAGE_START") {
-          const msgId = event.messageId as string;
-          if (!findAssistantByMessageId(msgId)) {
-            messages.value.push({
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: "",
-              messageId: msgId,
-              ui: [],
-            });
-          }
-        }
-
-        if (event.type === "TEXT_MESSAGE_CONTENT" && typeof event.delta === "string") {
-          const msgId = event.messageId as string;
-          const target = findAssistantByMessageId(msgId);
-          if (target) target.content += event.delta;
-          else {
-            messages.value.push({
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: event.delta,
-              messageId: msgId,
-              ui: [],
-            });
-          }
-        }
-
-        // UI blocks
-        if (event.type === "UI_COMPONENT") {
-          const msgId = event.messageId as string;
-          const target = findAssistantByMessageId(msgId);
-
-          const block: UiBlock = {
+        if (target) {
+          target.ui ??= [];
+          target.ui.push(block);
+        } else {
+          messages.value.push({
             id: crypto.randomUUID(),
-            component: event.component,
-            props: event.props ?? {},
-          };
+            role: "assistant",
+            content: "",
+            messageId: msgId,
+            ui: [block],
+          });
+        }
+      },
 
-          if (target) {
-            target.ui ??= [];
-            target.ui.push(block);
-          } else {
-            messages.value.push({
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: "",
-              messageId: msgId,
-              ui: [block],
-            });
-          }
+      // ===== TOOL CALLS (frontend tools) =====
+      onToolCallStartEvent: ({ event }) => {
+        toolArgsById.set(event.toolCallId, "");
+        pendingToolCall = {
+          toolCallId: event.toolCallId,
+          toolCallName: event.toolCallName,
+          args: {},
+        };
+      },
+      onToolCallArgsEvent: ({ event }) => {
+        const prev = toolArgsById.get(event.toolCallId) || "";
+        toolArgsById.set(event.toolCallId, prev + (event.delta || ""));
+      },
+      onToolCallEndEvent: ({ event }) => {
+        const rawArgs = toolArgsById.get(event.toolCallId) || "{}";
+        let argsObj: any = {};
+        try {
+          argsObj = JSON.parse(rawArgs);
+        } catch {
+          console.warn("Failed to parse tool args JSON:", rawArgs);
+        }
+        if (
+          pendingToolCall &&
+          pendingToolCall.toolCallId === event.toolCallId
+        ) {
+          pendingToolCall.args = argsObj;
+        }
+      },
+
+      // ===== RUN FINISHED =====
+      onRunFinishedEvent: async ({ runId: finishedRunId, event }) => {
+        // 1) сохраняем законченные шаги в историю
+        persistStepsToTopHistory(finishedRunId);
+
+        // 2) забираем pendingToolCall (если сервер его положил в RUN_FINISHED)
+        if (event?.pendingToolCall) {
+          pendingToolCall = event.pendingToolCall;
         }
 
-        // Run end
-        if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
-          persistStepsToTopHistory(runId);
+        // 3) Если есть незакрытый вызов тулзы — запускаем клиентский инструмент
+        if (pendingToolCall && !hasToolResult(pendingToolCall.toolCallId)) {
+          const toolFn = clientTools[pendingToolCall.toolCallName];
+          if (toolFn) {
+            const resultText = await toolFn(pendingToolCall.args);
 
-          if (event.pendingToolCall) {
-            pendingToolCall = event.pendingToolCall as PendingToolCall;
-          }
+            messages.value.push({
+              id: crypto.randomUUID(),
+              role: "tool",
+              name: pendingToolCall.toolCallName,
+              toolCallId: pendingToolCall.toolCallId,
+              content: resultText,
+            });
 
-          // We execute the tool only if there is no result yet.
-          if (pendingToolCall && !hasToolResult(pendingToolCall.toolCallId)) {
-            const toolFn = clientTools[pendingToolCall.toolCallName];
-            if (toolFn) {
-              const resultText = await toolFn(pendingToolCall.args);
-
-              messages.value.push({
-                id: crypto.randomUUID(),
-                role: "tool",
-                name: pendingToolCall.toolCallName,
-                toolCallId: pendingToolCall.toolCallId,
-                content: resultText,
-              });
-
-              const followUpRunId = `run-${++runCounter}`;
-              pendingToolCall = null; 
-              await runAgent(followUpRunId);
-            } else {
-              console.warn("No client tool handler for", pendingToolCall.toolCallName);
-              pendingToolCall = null;
-            }
+            const followUpRunId = `run-${++runCounter}`;
+            pendingToolCall = null; // anti-loop
+            await runAgent(followUpRunId);
           } else {
+            console.warn(
+              "No client tool handler for",
+              pendingToolCall.toolCallName,
+            );
             pendingToolCall = null;
           }
+        } else {
+          pendingToolCall = null;
         }
-      } catch (e) {
-        console.warn("Failed to parse SSE event json:", jsonStr, e);
-      }
-    }
-  }
+      },
+
+      // Можно логировать ошибки
+      onRunErrorEvent: ({ error }) => {
+        console.error("AG-UI run error:", error);
+        persistStepsToTopHistory(runId);
+      },
+    },
+  );
+
+  // result можно использовать, если нужно (final messages/state)
 }
+
+/* ==============================
+ * Отправка пользовательского сообщения
+ * ============================== */
 
 async function sendUser() {
   if (!userInput.value.trim()) return;
@@ -476,10 +516,10 @@ async function sendUser() {
 
 /* ===== Unified Thinking Panel ===== */
 .thinking-panel {
-  border: 1px dashed rgba(255,255,255,0.25);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
   border-radius: 12px;
   padding: 10px 12px;
-  background: rgba(120,120,120,0.08);
+  background: rgba(120, 120, 120, 0.08);
   display: grid;
   gap: 10px;
 }
@@ -495,7 +535,7 @@ async function sendUser() {
   font-size: 11px;
   padding: 2px 6px;
   border-radius: 999px;
-  background: rgba(255,255,255,0.08);
+  background: rgba(255, 255, 255, 0.08);
   opacity: 0.9;
 }
 
@@ -546,15 +586,15 @@ async function sendUser() {
   margin-left: 4px;
   width: 10px;
   height: 10px;
-  border: 2px solid rgba(255,255,255,0.35);
-  border-top-color: rgba(255,255,255,0.9);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: rgba(255, 255, 255, 0.9);
   border-radius: 999px;
   animation: spin 0.8s linear infinite;
 }
 
 /* history run accordion */
 .history-run {
-  border-top: 1px dashed rgba(255,255,255,0.12);
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
   padding-top: 8px;
   margin-top: 6px;
 }
@@ -574,11 +614,22 @@ async function sendUser() {
   font-weight: 600;
   opacity: 0.9;
 }
-.history-run-header:hover { opacity: 1; }
-.muted { opacity: 0.6; font-weight: 400; }
-.chev { opacity: 0.8; }
+.history-run-header:hover {
+  opacity: 1;
+}
+.muted {
+  opacity: 0.6;
+  font-weight: 400;
+}
+.chev {
+  opacity: 0.8;
+}
 
-.run-title { display: inline-flex; align-items: center; gap: 6px; }
+.run-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .run-id {
   font-size: 11px;
   opacity: 0.55;
@@ -586,11 +637,24 @@ async function sendUser() {
 }
 
 @keyframes pulse {
-  0% { transform: scale(0.9); opacity: 0.4; }
-  50% { transform: scale(1.2); opacity: 1; }
-  100% { transform: scale(0.9); opacity: 0.4; }
+  0% {
+    transform: scale(0.9);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.4;
+  }
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* ===== Chat ===== */
 .messages {
@@ -605,15 +669,26 @@ async function sendUser() {
   flex-direction: column;
   gap: 6px;
 }
-.message.user { text-align: right; }
-.message-text { white-space: pre-wrap; }
-.ui-blocks { margin-left: 8px; }
+.message.user {
+  text-align: right;
+}
+.message-text {
+  white-space: pre-wrap;
+}
+.ui-blocks {
+  margin-left: 8px;
+}
 
 /* ===== Input ===== */
 .input-row {
   display: flex;
   gap: 8px;
 }
-input { flex: 1; padding: 8px; }
-button { padding: 8px 12px; }
+input {
+  flex: 1;
+  padding: 8px;
+}
+button {
+  padding: 8px 12px;
+}
 </style>

@@ -89,6 +89,9 @@ async function runStep(
   res.write(stepFinished(encoder, stepId));
 }
 
+/**
+ * Time-intent detector (RU + EN)
+ */
 function needsClientTime(userText: string) {
   const t = userText.toLowerCase().trim();
 
@@ -119,7 +122,9 @@ function needsClientTime(userText: string) {
   return false;
 }
 
-
+/**
+ * Searching for tool-result getClientTime AFTER the last user message.
+ */
 function findLatestClientTimeResult(messages: any[]) {
   const lastUserIdx =
     [...messages]

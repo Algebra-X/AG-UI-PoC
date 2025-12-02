@@ -112,7 +112,7 @@ type UiBlock =
     }
   | {
       id?: string;
-      component: string;      // другие компоненты
+      component: string;
       props: Record<string, any>;
     };
 
@@ -174,25 +174,25 @@ function prettyStepTitle(title: string) {
   return title.trim();
 }
 
-
 function prettyRunTitle(h: ThinkingRunHistory) {
-  const titles = h.steps.map(s => s.title.toLowerCase());
+  const titles = h.steps.map((s) => s.title.toLowerCase());
 
   const isTimeFlow =
-    titles.some(t => t.includes("time")) ||
-    titles.some(t => t.includes("local time")) ||
-    titles.some(t => t.includes("browser time")) ||
-    titles.some(t => t.includes("frontend time"));
+    titles.some((t) => t.includes("time")) ||
+    titles.some((t) => t.includes("local time")) ||
+    titles.some((t) => t.includes("browser time")) ||
+    titles.some((t) => t.includes("frontend time"));
 
   if (isTimeFlow) {
-    const isToolRequestRun =
-      titles.some(t => t.includes("requesting local time"));
+    const isToolRequestRun = titles.some((t) =>
+      t.includes("requesting local time"),
+    );
 
     const isToolResultRun =
-      titles.some(t => t.includes("reading the time returned")) ||
-      titles.some(t => t.includes("replying with the user's local time")) ||
-      titles.some(t => t.includes("composing the final time answer")) ||
-      titles.some(t => t.includes("formatting final answer"));
+      titles.some((t) => t.includes("reading the time returned")) ||
+      titles.some((t) => t.includes("replying with the user's local time")) ||
+      titles.some((t) => t.includes("composing the final time answer")) ||
+      titles.some((t) => t.includes("formatting final answer"));
 
     if (isToolRequestRun) return "🕒 Time — запрос времени у браузера";
     if (isToolResultRun) return "🕒 Time — ответ по результату тулзы";
@@ -249,6 +249,22 @@ const clientTools: Record<string, (args: any) => Promise<string>> = {
     if (args?.format === "iso") return now.toISOString();
     return now.toLocaleString();
   },
+
+  async openWeatherTab(args: any) {
+    const url = args?.url as string | undefined;
+    const location =
+      (args?.location as string | undefined) ?? "the requested location";
+
+    if (typeof url === "string" && url.length > 0) {
+      // собственно client-side действие
+      window.open(url, "_blank", "noopener,noreferrer");
+      // текст, который пойдёт в tool-сообщение
+      return `Opened weather for ${location} in a new browser tab: ${url}`;
+    } else {
+      console.warn("openWeatherTab: missing url in args", args);
+      return "Could not open weather tab: missing URL from the agent.";
+    }
+  },
 };
 
 type PendingToolCall = {
@@ -272,9 +288,15 @@ async function runAgent(runId: string) {
   const payload = {
     threadId,
     runId,
-    messages: messages.value.map(({ id, role, content, toolCallId, name }) => ({
-      id, role, content, toolCallId, name
-    })),
+    messages: messages.value.map(
+      ({ id, role, content, toolCallId, name }) => ({
+        id,
+        role,
+        content,
+        toolCallId,
+        name,
+      }),
+    ),
     tools: [
       {
         name: "getClientTime",
@@ -282,6 +304,19 @@ async function runAgent(runId: string) {
         parameters: {
           type: "object",
           properties: { format: { type: "string" } },
+        },
+      },
+      {
+        name: "openWeatherTab",
+        description:
+          "Opens the weather search page for a given location in a new browser tab.",
+        parameters: {
+          type: "object",
+          properties: {
+            location: { type: "string" },
+            url: { type: "string" },
+          },
+          required: ["url"],
         },
       },
     ],
@@ -346,8 +381,13 @@ async function runAgent(runId: string) {
         if (event.type === "TOOL_CALL_END") {
           const rawArgs = toolArgsById.get(event.toolCallId) || "{}";
           let argsObj: any = {};
-          try { argsObj = JSON.parse(rawArgs); } catch {}
-          if (pendingToolCall && pendingToolCall.toolCallId === event.toolCallId) {
+          try {
+            argsObj = JSON.parse(rawArgs);
+          } catch {}
+          if (
+            pendingToolCall &&
+            pendingToolCall.toolCallId === event.toolCallId
+          ) {
             pendingToolCall.args = argsObj;
           }
         }
@@ -366,7 +406,10 @@ async function runAgent(runId: string) {
           }
         }
 
-        if (event.type === "TEXT_MESSAGE_CONTENT" && typeof event.delta === "string") {
+        if (
+          event.type === "TEXT_MESSAGE_CONTENT" &&
+          typeof event.delta === "string"
+        ) {
           const msgId = event.messageId as string;
           const target = findAssistantByMessageId(msgId);
           if (target) target.content += event.delta;
@@ -414,8 +457,11 @@ async function runAgent(runId: string) {
             pendingToolCall = event.pendingToolCall as PendingToolCall;
           }
 
-          // We execute the tool only if there is no result yet.
-          if (pendingToolCall && !hasToolResult(pendingToolCall.toolCallId)) {
+          // Execute client tool if needed and no result yet.
+          if (
+            pendingToolCall &&
+            !hasToolResult(pendingToolCall.toolCallId)
+          ) {
             const toolFn = clientTools[pendingToolCall.toolCallName];
             if (toolFn) {
               const resultText = await toolFn(pendingToolCall.args);
@@ -429,10 +475,13 @@ async function runAgent(runId: string) {
               });
 
               const followUpRunId = `run-${++runCounter}`;
-              pendingToolCall = null; 
+              pendingToolCall = null;
               await runAgent(followUpRunId);
             } else {
-              console.warn("No client tool handler for", pendingToolCall.toolCallName);
+              console.warn(
+                "No client tool handler for",
+                pendingToolCall.toolCallName,
+              );
               pendingToolCall = null;
             }
           } else {
@@ -476,10 +525,10 @@ async function sendUser() {
 
 /* ===== Unified Thinking Panel ===== */
 .thinking-panel {
-  border: 1px dashed rgba(255,255,255,0.25);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
   border-radius: 12px;
   padding: 10px 12px;
-  background: rgba(120,120,120,0.08);
+  background: rgba(120, 120, 120, 0.08);
   display: grid;
   gap: 10px;
 }
@@ -495,7 +544,7 @@ async function sendUser() {
   font-size: 11px;
   padding: 2px 6px;
   border-radius: 999px;
-  background: rgba(255,255,255,0.08);
+  background: rgba(255, 255, 255, 0.08);
   opacity: 0.9;
 }
 
@@ -546,15 +595,15 @@ async function sendUser() {
   margin-left: 4px;
   width: 10px;
   height: 10px;
-  border: 2px solid rgba(255,255,255,0.35);
-  border-top-color: rgba(255,255,255,0.9);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: rgba(255, 255, 255, 0.9);
   border-radius: 999px;
   animation: spin 0.8s linear infinite;
 }
 
 /* history run accordion */
 .history-run {
-  border-top: 1px dashed rgba(255,255,255,0.12);
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
   padding-top: 8px;
   margin-top: 6px;
 }
@@ -574,11 +623,22 @@ async function sendUser() {
   font-weight: 600;
   opacity: 0.9;
 }
-.history-run-header:hover { opacity: 1; }
-.muted { opacity: 0.6; font-weight: 400; }
-.chev { opacity: 0.8; }
+.history-run-header:hover {
+  opacity: 1;
+}
+.muted {
+  opacity: 0.6;
+  font-weight: 400;
+}
+.chev {
+  opacity: 0.8;
+}
 
-.run-title { display: inline-flex; align-items: center; gap: 6px; }
+.run-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .run-id {
   font-size: 11px;
   opacity: 0.55;
@@ -586,11 +646,24 @@ async function sendUser() {
 }
 
 @keyframes pulse {
-  0% { transform: scale(0.9); opacity: 0.4; }
-  50% { transform: scale(1.2); opacity: 1; }
-  100% { transform: scale(0.9); opacity: 0.4; }
+  0% {
+    transform: scale(0.9);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.4;
+  }
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* ===== Chat ===== */
 .messages {
@@ -605,15 +678,26 @@ async function sendUser() {
   flex-direction: column;
   gap: 6px;
 }
-.message.user { text-align: right; }
-.message-text { white-space: pre-wrap; }
-.ui-blocks { margin-left: 8px; }
+.message.user {
+  text-align: right;
+}
+.message-text {
+  white-space: pre-wrap;
+}
+.ui-blocks {
+  margin-left: 8px;
+}
 
 /* ===== Input ===== */
 .input-row {
   display: flex;
   gap: 8px;
 }
-input { flex: 1; padding: 8px; }
-button { padding: 8px 12px; }
+input {
+  flex: 1;
+  padding: 8px;
+}
+button {
+  padding: 8px 12px;
+}
 </style>

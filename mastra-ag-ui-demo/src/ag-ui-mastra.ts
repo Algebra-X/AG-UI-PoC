@@ -50,23 +50,26 @@ type WeatherPayload = {
 
 function extractWeatherJson(text: string): {
   cleanText: string;
-  weather?: WeatherPayload;
+  weathers: WeatherPayload[];
 } {
-  const regex = /```weather\s*([\s\S]*?)```/i;
-  const match = text.match(regex);
-  if (!match) return { cleanText: text };
+  const regex = /```weather\s*([\s\S]*?)```/gi;
+  const weathers: WeatherPayload[] = [];
+  let match: RegExpExecArray | null;
 
-  const jsonStr = match[1].trim();
-  let weather: WeatherPayload | undefined;
-
-  try {
-    weather = JSON.parse(jsonStr);
-  } catch {
-    console.warn("Failed to parse weather JSON:", jsonStr);
+  while ((match = regex.exec(text)) !== null) {
+    const jsonStr = match[1].trim();
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed && typeof parsed === "object") {
+        weathers.push(parsed as WeatherPayload);
+      }
+    } catch {
+      console.warn("Failed to parse weather JSON:", jsonStr);
+    }
   }
 
   const cleanText = text.replace(regex, "").trim();
-  return { cleanText, weather };
+  return { cleanText, weathers };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -123,6 +126,43 @@ function needsClientTime(userText: string) {
 }
 
 /**
+ * Open-weather-in-new-tab intent detector (RU + EN)
+ */
+function needsOpenWeatherTab(userText: string) {
+  const t = userText.toLowerCase().trim();
+
+  const ruTriggers = [
+    "открой погоду",
+    "погоду в новой вкладке",
+    "открой погоду в новой вкладке",
+  ];
+
+  const enTriggers = [
+    "open the weather",
+    "open weather",
+    "weather in a new tab",
+    "open weather in a new tab",
+  ];
+
+  if (ruTriggers.some((x) => t.includes(x))) return true;
+  if (enTriggers.some((x) => t.includes(x))) return true;
+
+  return false;
+}
+
+// очень простая эвристика: вытаскиваем локацию из текста
+function extractLocationForOpenWeather(userText: string): string | null {
+  const mEn = userText.match(/weather (of|in)\s+(.+?)( in a new tab|$)/i);
+  if (mEn && mEn[2]) return mEn[2].trim();
+
+  // упрощённый RU вариант: "погоду в <городе>"
+  const mRu = userText.match(/погоду\s+в\s+(.+)/i);
+  if (mRu && mRu[1]) return mRu[1].trim();
+
+  return null;
+}
+
+/**
  * Searching for tool-result getClientTime AFTER the last user message.
  */
 function findLatestClientTimeResult(messages: any[]) {
@@ -173,6 +213,75 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
 
   const lastUser = [...input.messages].reverse().find((m) => m.role === "user");
   const userText = lastUser?.content ?? "empty message";
+
+  // =========================================================
+  //  OPEN WEATHER IN NEW TAB (client-side tool)
+  // =========================================================
+  if (needsOpenWeatherTab(userText)) {
+    const location =
+      extractLocationForOpenWeather(userText) || "Stuttgart";
+
+    await runStep(
+      res,
+      encoder,
+      `step-${input.runId}-open-1`,
+      "Understanding request to open weather in a new browser tab",
+      600,
+    );
+
+    await runStep(
+      res,
+      encoder,
+      `step-${input.runId}-open-2`,
+      "Asking the browser to open AccuWeather",
+      400,
+    );
+
+    const toolCallId = `open-weather-tab-${input.threadId}-${Date.now()}`;
+    const url = `https://www.accuweather.com/en/search-locations?query=${encodeURIComponent(
+      location,
+    )}`;
+
+    res.write(
+      encoder.encode({
+        type: "TOOL_CALL_START",
+        toolCallId,
+        toolCallName: "openWeatherTab",
+      } as any),
+    );
+
+    res.write(
+      encoder.encode({
+        type: "TOOL_CALL_ARGS",
+        toolCallId,
+        delta: JSON.stringify({ location, url }),
+      } as any),
+    );
+
+    res.write(
+      encoder.encode({
+        type: "TOOL_CALL_END",
+        toolCallId,
+      } as any),
+    );
+
+    res.write(
+      encoder.encode({
+        type: "RUN_FINISHED",
+        threadId: input.threadId,
+        runId: input.runId,
+        pendingToolCall: {
+          toolCallId,
+          toolCallName: "openWeatherTab",
+          args: { location, url },
+          reason: "user asked to open weather in a new tab",
+        },
+      } as any),
+    );
+
+    res.end();
+    return;
+  }
 
   // =========================================================
   // TIME SCENARIO 
@@ -390,7 +499,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     350,
   );
 
-  const { cleanText, weather } = extractWeatherJson(replyText);
+  const { cleanText, weathers } = extractWeatherJson(replyText);
 
   res.write(
     encoder.encode({
@@ -420,21 +529,23 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
-  if (weather) {
-    res.write(
-      encoder.encode({
-        type: "UI_COMPONENT",
-        messageId,
-        component: "weather-card",
-        props: {
-          location: weather.location,
-          temperature: `${weather.temperatureC}°C`,
-          status: weather.status,
-          humidity: `${weather.humidityPct}%`,
-          wind: `${weather.windMs} m/s`,
-        },
-      } as any),
-    );
+  if (weathers && weathers.length > 0) {
+    for (const weather of weathers) {
+      res.write(
+        encoder.encode({
+          type: "UI_COMPONENT",
+          messageId,
+          component: "weather-card",
+          props: {
+            location: weather.location,
+            temperature: `${weather.temperatureC}°C`,
+            status: weather.status,
+            humidity: `${weather.humidityPct}%`,
+            wind: `${weather.windMs} m/s`,
+          },
+        } as any),
+      );
+    }
   }
 
   res.write(

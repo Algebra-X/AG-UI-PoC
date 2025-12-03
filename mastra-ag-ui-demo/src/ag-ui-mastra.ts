@@ -48,6 +48,10 @@ type WeatherPayload = {
   windMs: number;
 };
 
+type StepPayload = {
+  title: string;
+};
+
 function extractWeatherJson(text: string): {
   cleanText: string;
   weathers: WeatherPayload[];
@@ -57,7 +61,10 @@ function extractWeatherJson(text: string): {
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(text)) !== null) {
-    const jsonStr = match[1].trim();
+    const raw = match[1];
+    if (typeof raw !== "string") continue;
+
+    const jsonStr = raw.trim();
     try {
       const parsed = JSON.parse(jsonStr);
       if (parsed && typeof parsed === "object") {
@@ -72,6 +79,47 @@ function extractWeatherJson(text: string): {
   return { cleanText, weathers };
 }
 
+/**
+ * Вытаскиваем блок ```steps [...] ``` из ответа модели
+ * и возвращаем список шагов + очищенный текст.
+ */
+function extractStepsJson(text: string): {
+  cleanText: string;
+  steps: StepPayload[];
+} {
+  const regex = /```steps\s*([\s\S]*?)```/i;
+  const match = text.match(regex);
+
+  if (!match || typeof match[1] !== "string") {
+    return { cleanText: text, steps: [] };
+  }
+
+  const jsonStr = match[1].trim();
+  const steps: StepPayload[] = [];
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (
+          item &&
+          typeof item === "object" &&
+          typeof (item as any).title === "string"
+        ) {
+          steps.push({ title: (item as any).title });
+        }
+      }
+    } else {
+      console.warn("steps JSON is not an array:", parsed);
+    }
+  } catch (e) {
+    console.warn("Failed to parse steps JSON:", jsonStr, e);
+  }
+
+  const cleanText = text.replace(regex, "").trim();
+  return { cleanText, steps };
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function stepStarted(encoder: EventEncoder, stepId: string, title: string) {
@@ -80,12 +128,19 @@ function stepStarted(encoder: EventEncoder, stepId: string, title: string) {
 function stepFinished(encoder: EventEncoder, stepId: string) {
   return encoder.encode({ type: "STEP_FINISHED", stepId } as any);
 }
+
+/**
+ * Для time-сценария — один helper, чтобы не дублировать код.
+ */
+
+const STEP_DELAY_MS = 5000;
+
 async function runStep(
   res: Response,
   encoder: EventEncoder,
   stepId: string,
   title: string,
-  ms: number,
+  ms: number = STEP_DELAY_MS,
 ) {
   res.write(stepStarted(encoder, stepId, title));
   await sleep(ms);
@@ -178,13 +233,13 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   const userText = lastUser?.content ?? "empty message";
 
   // =========================================================
-  // TIME SCENARIO 
+  // TIME SCENARIO
   // =========================================================
   if (needsClientTime(userText)) {
     const existingTime = findLatestClientTimeResult(input.messages);
 
     if (!existingTime) {
-      // ---- RUN-1: only tool request ----
+      // ---- RUN-1: только запрос тулзы ----
       await runStep(
         res,
         encoder,
@@ -244,7 +299,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
       return;
     }
 
-    // ---- RUN-2: response based on the ready tool-result ----
+    // ---- RUN-2: ответ по готовому результату тулзы ----
     await runStep(
       res,
       encoder,
@@ -303,31 +358,8 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   }
 
   // =========================================================
-  //  WEATHER SCENARIO
+  //  WEATHER SCENARIO (шаги берём от модели)
   // =========================================================
-  await runStep(
-    res,
-    encoder,
-    `step-${input.runId}-1`,
-    "Interpreting the user's weather request",
-    1000,
-  );
-
-  await runStep(
-    res,
-    encoder,
-    `step-${input.runId}-2`,
-    "Extracting location from the conversation",
-    450,
-  );
-
-  await runStep(
-    res,
-    encoder,
-    `step-${input.runId}-3`,
-    "Preparing a weather data tool call",
-    450,
-  );
 
   const weatherAgent =
     (mastra as any).getAgent?.("weatherAgent") ??
@@ -338,9 +370,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
   if (!weatherAgent) {
     replyText = `Could not find weatherAgent. Pseudo-response to: "${userText}"`;
   } else {
-    const step4 = `step-${input.runId}-4`;
-    res.write(stepStarted(encoder, step4, "Running the Mastra weather agent"));
-
     try {
       const mastraMessages = input.messages
         .filter(
@@ -380,21 +409,30 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
         (typeof result === "string" ? result : String(result ?? ""));
     } catch (err) {
       replyText = `Sorry, I couldn't get the weather. Details: ${String(err)}`;
-    } finally {
-      res.write(stepFinished(encoder, step4));
     }
   }
 
-  await runStep(
-    res,
-    encoder,
-    `step-${input.runId}-5`,
-    "Formatting the response and weather card",
-    350,
-  );
+  // 1) забираем steps из текста ответа модели
+  const { cleanText: withoutSteps, steps } = extractStepsJson(replyText);
 
-  const { cleanText, weathers } = extractWeatherJson(replyText);
+  // 2) забираем weather-json (карточки) из оставшегося текста
+  const { cleanText, weathers } = extractWeatherJson(withoutSteps);
 
+  // 3) на основании steps шлём STEP_STARTED/FINISHED
+  if (steps.length > 0) {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const stepId = `model-step-${input.runId}-${i + 1}`;
+      const title =
+        step.title && step.title.trim().length > 0
+          ? step.title.trim()
+          : `Step ${i + 1}`;
+
+       await runStep(res, encoder, stepId, title); // 5 секунд по умолчанию
+    }
+  }
+
+  // 4) стримим текст сообщения
   res.write(
     encoder.encode({
       type: "TEXT_MESSAGE_START",
@@ -423,6 +461,7 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
     } as any),
   );
 
+  // 5) UI-карточки погоды
   if (weathers && weathers.length > 0) {
     for (const weather of weathers) {
       res.write(

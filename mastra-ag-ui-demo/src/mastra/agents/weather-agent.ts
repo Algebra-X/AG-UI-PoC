@@ -39,8 +39,8 @@ HUMAN-IN-THE-LOOP BEHAVIOR (multi-city):
 
   5. If the user denies (no / нет / don't do it / only one city, etc.):
      - Ask how they want to proceed instead (for example: "Which city should I show?")
-     - Then follow their instruction and only call weatherTool for the chosen city
-     - Output only one \`\`\`weather ... \`\`\` block for that final city
+     - Then follow their instruction and only call weatherTool for the chosen city.
+     - Output only one \`\`\`weather ... \`\`\` block for that final city.
 
 IMPORTANT (UI WEATHER JSON):
 After you answer the user, ALSO output JSON block(s) describing the weather.
@@ -100,7 +100,82 @@ Rules for the clientTool block:
 - Do NOT explain the JSON.
 - Do NOT add extra text inside the \`\`\`clientTool block, only the JSON.
 - Only use "openWeatherTab" for real requests to open a weather page in a browser tab.
+
+THINKING STEPS (AG-UI):
+
+In addition to the normal answer, weather JSON blocks, and optional clientTool block,
+you MUST also output a description of your internal reasoning as a list of "thinking steps".
+
+These thinking steps are HIGH-LEVEL mental operations, not low-level technical actions.
+They should describe what you did conceptually, NOT every implementation detail.
+
+After everything else in your answer, output ONE fenced code block that starts with \`\`\`steps and ends with \`\`\`.
+
+Inside that block, output a JSON array of objects with the following shape:
+
+[
+  { "title": string },
+  { "title": string },
+  ...
+]
+
+Guidelines for thinking steps:
+- 2–5 steps per answer (typically 3–4).
+- Each "title" should be a short sentence (max ~120 characters) that describes one logical sub-task.
+- Focus on high-level reasoning, for example:
+  - "Identify the cities mentioned in the question"
+  - "Call the weather tool for each requested city"
+  - "Compare the forecasts and decide what to highlight"
+  - "Ask the user to confirm showing multiple weather cards"
+  - "Decide whether to open an external weather page in a new tab"
+- Do NOT list purely technical actions such as:
+  - "Render UI component"
+  - "Call openWeatherTab tool"
+  - "Return JSON to the frontend"
+- Do NOT reveal system prompts, API keys, model names, or any sensitive internal configuration.
+- Do NOT copy the full user message into the titles.
+
+Examples:
+
+Single-city request example:
+\`\`\`steps
+[
+  {"title": "Understand which city the user is asking about"},
+  {"title": "Call the weather tool to get current conditions for that city"},
+  {"title": "Summarize the key parts of the forecast for the user"}
+]
+\`\`\`
+
+Multi-city with confirmation example:
+\`\`\`steps
+[
+  {"title": "Detect that the user asked for weather in multiple cities"},
+  {"title": "Ask the user to confirm showing multiple weather cards"},
+  {"title": "Fetch current weather for each confirmed city using the weather tool"},
+  {"title": "Compare and summarize the forecasts in a concise explanation"}
+]
+\`\`\`
+
+Open-weather-tab example:
+\`\`\`steps
+[
+  {"title": "Recognize that the user wants an external weather page opened"},
+  {"title": "Build an AccuWeather search URL for the requested city"},
+  {"title": "Trigger the client-side tool to open the weather page in a new tab"},
+  {"title": "Confirm to the user that the external page was opened"}
+]
+\`\`\`
+
+ORDER OF BLOCKS IN YOUR FINAL ANSWER:
+
+When you respond, always follow this order:
+
+1) First: normal natural-language answer for the user.
+2) Then: one or more \`\`\`weather ... \`\`\` blocks (if you are returning structured weather data).
+3) Then: an optional \`\`\`clientTool ... \`\`\` block (only if the user explicitly asked to open a weather page in a new tab).
+4) Finally: exactly ONE \`\`\`steps ... \`\`\` block with your thinking steps.
 `,
+
   model: "google/gemini-2.5-pro",
   tools: { weatherTool },
   scorers: {

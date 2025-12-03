@@ -40,7 +40,7 @@
             </span>
 
             <span class="muted">{{ h.steps.length }} steps</span>
-            <span class="chev">{{ expandedRuns.has(h.runId) ? "▾" : "▸" }}</span>
+            <span class="chev">{{ expandedRuns.has(h.runId) ? '▾' : '▸' }}</span>
           </button>
 
           <ul
@@ -155,7 +155,7 @@ const expandedRuns = ref<Set<string>>(new Set());
 const activeRunId = ref<string | null>(null);
 
 const hasAnyThinking = computed(
-  () => thinkingSteps.value.length > 0 || thinkingHistory.value.length > 0
+  () => thinkingSteps.value.length > 0 || thinkingHistory.value.length > 0,
 );
 
 function toggleRun(runId: string) {
@@ -256,9 +256,7 @@ const clientTools: Record<string, (args: any) => Promise<string>> = {
       (args?.location as string | undefined) ?? "the requested location";
 
     if (typeof url === "string" && url.length > 0) {
-      // собственно client-side действие
       window.open(url, "_blank", "noopener,noreferrer");
-      // текст, который пойдёт в tool-сообщение
       return `Opened weather for ${location} in a new browser tab: ${url}`;
     } else {
       console.warn("openWeatherTab: missing url in args", args);
@@ -281,6 +279,69 @@ function hasToolResult(toolCallId: string) {
     (m) => m.role === "tool" && m.toolCallId === toolCallId,
   );
 }
+
+/** =========================================================
+ *  clientTool-блоки из ответа агента (```clientTool { ... } ```)
+ *  ========================================================= */
+
+type ParsedClientTool = { name: string; args: any } | undefined;
+
+function extractClientToolFromText(text: string): {
+  cleanText: string;
+  tool?: ParsedClientTool;
+} {
+  const regex = /```clientTool\s*([\s\S]*?)```/i;
+  const match = text.match(regex);
+
+  // match может быть null, а match[1] — undefined, поэтому проверяем оба
+  if (!match || typeof match[1] !== "string") {
+    return { cleanText: text, tool: undefined };
+  }
+
+  const jsonStr = match[1].trim();
+  let tool: ParsedClientTool;
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (parsed && typeof parsed.name === "string") {
+      tool = { name: parsed.name as string, args: parsed };
+    }
+  } catch (e) {
+    console.warn("Failed to parse clientTool JSON:", e);
+  }
+
+  const cleanText = text.replace(regex, "").trim();
+  return { cleanText, tool };
+}
+
+async function handleClientToolFromAssistantMessage(msg: ChatMessage) {
+  if (!msg.content) return;
+
+  const { cleanText, tool } = extractClientToolFromText(msg.content);
+
+  // Обновляем текст без clientTool-блока, даже если парс не удался
+  msg.content = cleanText;
+
+  if (!tool) return;
+  const fn = clientTools[tool.name];
+  if (!fn) {
+    console.warn("No client tool for name from clientTool block:", tool.name);
+    return;
+  }
+
+  const resultText = await fn(tool.args);
+
+  messages.value.push({
+    id: crypto.randomUUID(),
+    role: "tool",
+    name: tool.name,
+    content: resultText,
+  });
+}
+
+/** =========================================================
+ *  RUN / SSE loop
+ *  ========================================================= */
 
 async function runAgent(runId: string) {
   activeRunId.value = runId;
@@ -306,19 +367,7 @@ async function runAgent(runId: string) {
           properties: { format: { type: "string" } },
         },
       },
-      {
-        name: "openWeatherTab",
-        description:
-          "Opens the weather search page for a given location in a new browser tab.",
-        parameters: {
-          type: "object",
-          properties: {
-            location: { type: "string" },
-            url: { type: "string" },
-          },
-          required: ["url"],
-        },
-      },
+      // openWeatherTab тут не нужен — он идёт через clientTool-блок, а не через pendingToolCall
     ],
     context: [],
     forwardedProps: {},
@@ -363,7 +412,7 @@ async function runAgent(runId: string) {
           finishStep(event.stepId);
         }
 
-        // Tool calls (frontend)
+        // Tool calls (frontend) — сценарий времени через pendingToolCall
         if (event.type === "TOOL_CALL_START") {
           toolArgsById.set(event.toolCallId, "");
           pendingToolCall = {
@@ -451,26 +500,37 @@ async function runAgent(runId: string) {
 
         // Run end
         if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
+          // 1) переносим шаги в историю
           persistStepsToTopHistory(runId);
 
+          // 2) ищем ассистентское сообщение этого run и обрабатываем clientTool-блок
+          const assistantMsg = messages.value.find(
+            (m) =>
+              m.role === "assistant" &&
+              m.messageId === `assistant-${runId}`,
+          );
+
+          if (assistantMsg !== undefined) {
+            await handleClientToolFromAssistantMessage(assistantMsg);
+          }
+
+          // 3) классический сценарий pendingToolCall (время)
           if (event.pendingToolCall) {
             pendingToolCall = event.pendingToolCall as PendingToolCall;
           }
 
-          // Execute client tool if needed and no result yet.
-          if (
-            pendingToolCall &&
-            !hasToolResult(pendingToolCall.toolCallId)
-          ) {
-            const toolFn = clientTools[pendingToolCall.toolCallName];
+          const toolCall = pendingToolCall;
+
+          if (toolCall && !hasToolResult(toolCall.toolCallId)) {
+            const toolFn = clientTools[toolCall.toolCallName];
             if (toolFn) {
-              const resultText = await toolFn(pendingToolCall.args);
+              const resultText = await toolFn(toolCall.args);
 
               messages.value.push({
                 id: crypto.randomUUID(),
                 role: "tool",
-                name: pendingToolCall.toolCallName,
-                toolCallId: pendingToolCall.toolCallId,
+                name: toolCall.toolCallName,
+                toolCallId: toolCall.toolCallId,
                 content: resultText,
               });
 
@@ -478,10 +538,7 @@ async function runAgent(runId: string) {
               pendingToolCall = null;
               await runAgent(followUpRunId);
             } else {
-              console.warn(
-                "No client tool handler for",
-                pendingToolCall.toolCallName,
-              );
+              console.warn("No client tool handler for", toolCall.toolCallName);
               pendingToolCall = null;
             }
           } else {

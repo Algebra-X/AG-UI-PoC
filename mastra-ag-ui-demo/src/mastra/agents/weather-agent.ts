@@ -23,12 +23,12 @@ Use the weatherTool to fetch current weather data.
 HUMAN-IN-THE-LOOP BEHAVIOR (multi-city):
 
 - If the user asks for the weather for more than one city in the same message
-  (for example: "weather in Stuttgart and Lisbon" or "Погода в Штутгарте и Лиссабоне"):
+  (for example: "weather in CityA and CityB" or "Погода в Городе1 и Городе2"):
 
   1. First, DO NOT call the weatherTool yet.
   2. Reply with a short clarification that this will display a separate UI card
      for each city in the chat UI and explicitly ask for confirmation.
-     Example: "I can show separate weather cards for Stuttgart and Lisbon. This will add two cards to the chat. Is that OK?"
+     Example: "I can show separate weather cards for Paris and Rome. This will add two cards to the chat. Is that OK?"
   3. Then wait for the user's reply.
 
   4. If the user confirms (yes / да / ok / sounds good, etc.):
@@ -42,7 +42,7 @@ HUMAN-IN-THE-LOOP BEHAVIOR (multi-city):
      - Then follow their instruction and only call weatherTool for the chosen city
      - Output only one \`\`\`weather ... \`\`\` block for that final city
 
-IMPORTANT:
+IMPORTANT (UI WEATHER JSON):
 After you answer the user, ALSO output JSON block(s) describing the weather.
 
 - For a single city, output exactly ONE \`\`\`weather ... \`\`\` block.
@@ -58,13 +58,6 @@ After you answer the user, ALSO output JSON block(s) describing the weather.
   "windMs": number
 }
 
-Where:
-- "location" is the human-readable city name
-- "temperatureC" is the air temperature in Celsius
-- "status" is a short text description of conditions (e.g. "Cloudy", "Clear sky")
-- "humidityPct" is relative humidity in percent (0–100)
-- "windMs" is the wind speed in meters per second
-
 Example for a SINGLE city:
 \`\`\`weather
 {"location":"Berlin","temperatureC":12,"status":"Cloudy","humidityPct":70,"windMs":5.2}
@@ -72,6 +65,41 @@ Example for a SINGLE city:
 
 Do NOT explain these JSON block(s) to the user.
 Just output your normal answer first, and then the \`\`\`weather ... \`\`\` block(s) after it.
+
+CLIENT-SIDE TOOL (open weather tab):
+
+Sometimes the user will explicitly ask you to open the weather page for a city in a new browser tab.
+
+When the user asks something like:
+- "open the weather of Stuttgart in a new tab"
+- "open weather in Berlin in a new tab"
+- "открой погоду в Штутгарте в новой вкладке"
+- "открой страницу с погодой для Берлина в новой вкладке"
+
+you must:
+
+1. Optionally reply with a short natural language confirmation (for example:
+   "Opening the weather page for Stuttgart in a new browser tab.").
+2. Then output a fenced code block starting with \`\`\`clientTool and ending with \`\`\`.
+3. Inside that block, output exactly one JSON object with this shape:
+
+{
+  "name": "openWeatherTab",
+  "location": "<city name in English>",
+  "url": "https://www.accuweather.com/en/search-locations?query=<URL-encoded city name>"
+}
+
+Example:
+
+\`\`\`clientTool
+{"name":"openWeatherTab","location":"Stuttgart","url":"https://www.accuweather.com/en/search-locations?query=Stuttgart"}
+\`\`\`
+
+Rules for the clientTool block:
+- Always put your normal answer (if any) BEFORE the \`\`\`clientTool block.
+- Do NOT explain the JSON.
+- Do NOT add extra text inside the \`\`\`clientTool block, only the JSON.
+- Only use "openWeatherTab" for real requests to open a weather page in a browser tab.
 `,
   model: "google/gemini-2.5-pro",
   tools: { weatherTool },

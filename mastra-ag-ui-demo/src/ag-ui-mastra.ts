@@ -126,43 +126,6 @@ function needsClientTime(userText: string) {
 }
 
 /**
- * Open-weather-in-new-tab intent detector (RU + EN)
- */
-function needsOpenWeatherTab(userText: string) {
-  const t = userText.toLowerCase().trim();
-
-  const ruTriggers = [
-    "открой погоду",
-    "погоду в новой вкладке",
-    "открой погоду в новой вкладке",
-  ];
-
-  const enTriggers = [
-    "open the weather",
-    "open weather",
-    "weather in a new tab",
-    "open weather in a new tab",
-  ];
-
-  if (ruTriggers.some((x) => t.includes(x))) return true;
-  if (enTriggers.some((x) => t.includes(x))) return true;
-
-  return false;
-}
-
-// очень простая эвристика: вытаскиваем локацию из текста
-function extractLocationForOpenWeather(userText: string): string | null {
-  const mEn = userText.match(/weather (of|in)\s+(.+?)( in a new tab|$)/i);
-  if (mEn && mEn[2]) return mEn[2].trim();
-
-  // упрощённый RU вариант: "погоду в <городе>"
-  const mRu = userText.match(/погоду\s+в\s+(.+)/i);
-  if (mRu && mRu[1]) return mRu[1].trim();
-
-  return null;
-}
-
-/**
  * Searching for tool-result getClientTime AFTER the last user message.
  */
 function findLatestClientTimeResult(messages: any[]) {
@@ -213,75 +176,6 @@ app.post("/mastra-agent", async (req: Request, res: Response) => {
 
   const lastUser = [...input.messages].reverse().find((m) => m.role === "user");
   const userText = lastUser?.content ?? "empty message";
-
-  // =========================================================
-  //  OPEN WEATHER IN NEW TAB (client-side tool)
-  // =========================================================
-  if (needsOpenWeatherTab(userText)) {
-    const location =
-      extractLocationForOpenWeather(userText) || "Stuttgart";
-
-    await runStep(
-      res,
-      encoder,
-      `step-${input.runId}-open-1`,
-      "Understanding request to open weather in a new browser tab",
-      600,
-    );
-
-    await runStep(
-      res,
-      encoder,
-      `step-${input.runId}-open-2`,
-      "Asking the browser to open AccuWeather",
-      400,
-    );
-
-    const toolCallId = `open-weather-tab-${input.threadId}-${Date.now()}`;
-    const url = `https://www.accuweather.com/en/search-locations?query=${encodeURIComponent(
-      location,
-    )}`;
-
-    res.write(
-      encoder.encode({
-        type: "TOOL_CALL_START",
-        toolCallId,
-        toolCallName: "openWeatherTab",
-      } as any),
-    );
-
-    res.write(
-      encoder.encode({
-        type: "TOOL_CALL_ARGS",
-        toolCallId,
-        delta: JSON.stringify({ location, url }),
-      } as any),
-    );
-
-    res.write(
-      encoder.encode({
-        type: "TOOL_CALL_END",
-        toolCallId,
-      } as any),
-    );
-
-    res.write(
-      encoder.encode({
-        type: "RUN_FINISHED",
-        threadId: input.threadId,
-        runId: input.runId,
-        pendingToolCall: {
-          toolCallId,
-          toolCallName: "openWeatherTab",
-          args: { location, url },
-          reason: "user asked to open weather in a new tab",
-        },
-      } as any),
-    );
-
-    res.end();
-    return;
-  }
 
   // =========================================================
   // TIME SCENARIO 
